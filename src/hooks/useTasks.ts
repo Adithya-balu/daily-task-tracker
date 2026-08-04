@@ -3,6 +3,7 @@ import {
   DEFAULT_POMODORO_SETTINGS,
   PRIORITY_ORDER,
   type BrainDumpItem,
+  type DailyStats,
   type PomodoroSettings,
   type Priority,
   type Task,
@@ -16,18 +17,8 @@ function normalizeTask(t: Task): Task {
   return { ...t, notes: t.notes ?? '' }
 }
 
-/**
- * Rolls unfinished tasks forward to today so they never get lost.
- * Done tasks keep their original day (they belong to history).
- */
-function rolloverTasks(tasks: Task[], today: string): Task[] {
-  return tasks.map((t) => {
-    const base = normalizeTask(t)
-    if (base.status !== 'done' && base.dayKey !== today) {
-      return { ...base, dayKey: today }
-    }
-    return base
-  })
+function normalizeTasks(tasks: Task[]): Task[] {
+  return tasks.map(normalizeTask)
 }
 
 /**
@@ -84,11 +75,22 @@ export function sortTasks(tasks: Task[]): Task[] {
   })
 }
 
+function emptyDailyStats(dayKey: string): DailyStats {
+  return { dayKey, pomodoros: 0, focusedSeconds: 0 }
+}
+
+/** Load persisted day stats; reset to zeros if they're from a previous day. */
+function loadTodayStats(today: string): DailyStats {
+  const stored = loadJSON<DailyStats | null>(STORAGE_KEYS.dailyStats, null)
+  if (stored && stored.dayKey === today) return stored
+  return emptyDailyStats(today)
+}
+
 export function useTasks() {
   const today = dayKeyOf()
 
   const [tasks, setTasks] = useState<Task[]>(() =>
-    rolloverTasks(loadJSON<Task[]>(STORAGE_KEYS.tasks, []), today),
+    normalizeTasks(loadJSON<Task[]>(STORAGE_KEYS.tasks, [])),
   )
   const [brainDump, setBrainDump] = useState<BrainDumpItem[]>(() =>
     loadJSON<BrainDumpItem[]>(STORAGE_KEYS.brainDump, []),
@@ -96,23 +98,19 @@ export function useTasks() {
   const [settings, setSettings] = useState<PomodoroSettings>(() =>
     loadJSON<PomodoroSettings>(STORAGE_KEYS.settings, DEFAULT_POMODORO_SETTINGS),
   )
+  const [dailyStats, setDailyStats] = useState<DailyStats>(() => loadTodayStats(today))
 
   useDebouncedSave(STORAGE_KEYS.tasks, tasks)
   useDebouncedSave(STORAGE_KEYS.brainDump, brainDump)
   useDebouncedSave(STORAGE_KEYS.settings, settings)
+  useDebouncedSave(STORAGE_KEYS.dailyStats, dailyStats)
 
-  // Re-run rollover when the day changes while the app stays open overnight.
-  const dayRef = useRef(today)
+  // If the calendar day changes while the app stays open, start a fresh day bucket.
   useEffect(() => {
-    const interval = setInterval(() => {
-      const now = dayKeyOf()
-      if (now !== dayRef.current) {
-        dayRef.current = now
-        setTasks((prev) => rolloverTasks(prev, now))
-      }
-    }, 60_000)
-    return () => clearInterval(interval)
-  }, [])
+    if (dailyStats.dayKey !== today) {
+      setDailyStats(emptyDailyStats(today))
+    }
+  }, [today, dailyStats.dayKey])
 
   const addTask = useCallback((title: string, priority: Priority): Task => {
     const task: Task = {
@@ -149,12 +147,15 @@ export function useTasks() {
   const reorderTask = useCallback(
     (draggedId: string, status: TaskStatus, beforeId: string | null) => {
       if (draggedId === beforeId) return
+      const today = dayKeyOf()
       setTasks((prev) => {
         const dragged = prev.find((t) => t.id === draggedId)
         if (!dragged) return prev
         const updated: Task = {
           ...dragged,
           status,
+          // Completing stamps today; restoring / moving active work also lands on today.
+          dayKey: today,
           completedAt:
             status === 'done' ? dragged.completedAt ?? Date.now() : null,
         }
@@ -165,10 +166,10 @@ export function useTasks() {
           insertIndex = without.findIndex((t) => t.id === beforeId)
           if (insertIndex === -1) insertIndex = without.length
         } else {
-          // Append after the last task currently in the target column.
+          // Append after the last task currently in the target column for today.
           let last = -1
           without.forEach((t, i) => {
-            if (t.status === status) last = i
+            if (t.status === status && t.dayKey === today) last = i
           })
           insertIndex = last === -1 ? without.length : last + 1
         }
@@ -179,17 +180,40 @@ export function useTasks() {
   )
 
   const setStatus = useCallback((id: string, status: TaskStatus) => {
+    const today = dayKeyOf()
     setTasks((prev) =>
       prev.map((t) =>
         t.id === id
           ? {
               ...t,
               status,
+              dayKey: today,
               completedAt: status === 'done' ? Date.now() : null,
             }
           : t,
       ),
     )
+  }, [])
+
+  /** Bring a historical done task back onto today's board as To do. */
+  const restoreToToday = useCallback((id: string) => {
+    const today = dayKeyOf()
+    setTasks((prev) => {
+      const task = prev.find((t) => t.id === id)
+      if (!task) return prev
+      const updated: Task = {
+        ...task,
+        status: 'todo',
+        dayKey: today,
+        completedAt: null,
+      }
+      const without = prev.filter((t) => t.id !== id)
+      return [...without, updated]
+    })
+  }, [])
+
+  const setTitle = useCallback((id: string, title: string) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)))
   }, [])
 
   const setResumeNote = useCallback((id: string, resumeNote: string) => {
@@ -214,11 +238,18 @@ export function useTasks() {
 
   const addFocusedSeconds = useCallback((id: string, seconds: number) => {
     if (seconds <= 0) return
+    const add = Math.round(seconds)
     setTasks((prev) =>
       prev.map((t) =>
-        t.id === id ? { ...t, focusedSeconds: t.focusedSeconds + Math.round(seconds) } : t,
+        t.id === id ? { ...t, focusedSeconds: t.focusedSeconds + add } : t,
       ),
     )
+    // Also credit the calendar-day summary (separate from per-task lifetime totals).
+    const day = dayKeyOf()
+    setDailyStats((prev) => {
+      const base = prev.dayKey === day ? prev : emptyDailyStats(day)
+      return { ...base, focusedSeconds: base.focusedSeconds + add }
+    })
   }, [])
 
   const incrementPomodoro = useCallback((id: string) => {
@@ -227,6 +258,11 @@ export function useTasks() {
         t.id === id ? { ...t, pomodorosCompleted: t.pomodorosCompleted + 1 } : t,
       ),
     )
+    const day = dayKeyOf()
+    setDailyStats((prev) => {
+      const base = prev.dayKey === day ? prev : emptyDailyStats(day)
+      return { ...base, pomodoros: base.pomodoros + 1 }
+    })
   }, [])
 
   // ---- Brain dump ----
@@ -251,8 +287,13 @@ export function useTasks() {
     [addTask],
   )
 
+  // Expose stats for the current calendar day only (zeros if the bucket rolled).
+  const todayStats =
+    dailyStats.dayKey === today ? dailyStats : emptyDailyStats(today)
+
   return {
     today,
+    todayStats,
     tasks,
     brainDump,
     settings,
@@ -262,6 +303,8 @@ export function useTasks() {
     deleteTask,
     reorderTask,
     setStatus,
+    restoreToToday,
+    setTitle,
     setResumeNote,
     setNotes,
     appendSessionLog,

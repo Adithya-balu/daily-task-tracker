@@ -22,7 +22,7 @@ When you're constantly interrupted, tasks pile up and every return to a task cos
 - **Drag-to-reorder within a column**: an insertion line shows exactly where a card will land, so you can arrange tasks in whatever order you like. Your manual order is saved and persists.
 - **Per-task notes / plan**: click any card to open a detail view with a big notes area for details, an implementation plan, checklists, or links. The active task also has an inline notes area in the focus panel, and cards with notes show a small indicator.
 - **Checklists inside notes**: use markdown task syntax (`- [ ] item` / `- [x] item`), or hit the "Checklist item" button. In Preview mode the boxes are interactive - tick them off and the notes text updates automatically.
-- **Daily rollover**: unfinished tasks automatically carry to today.
+- **Day-based Done**: unfinished work always stays on Today. The Done column shows only today's completions; older ones move to a **History** tab (grouped by day), with Restore to bring one back.
 - **Brain dump inbox**: park a distracting thought without leaving your current task, then triage it into a task later.
 - **Desktop notification + chime** when a focus session ends.
 - **Keyboard shortcuts**: `n` to add a task, `space` to start/pause the active timer.
@@ -57,6 +57,7 @@ src/
   components/
     AddTaskBar.tsx           # quick add with priority
     Board.tsx                # drag-and-drop kanban board (To do / In progress / Done)
+    HistoryPanel.tsx         # past completed tasks grouped by day
     NotesEditor.tsx          # notes with interactive markdown checklists (edit/preview)
     TaskDetail.tsx           # click-to-open task modal: notes/plan, resume note, log
     FocusPanel.tsx           # active task: timer + notes + resume note + session log

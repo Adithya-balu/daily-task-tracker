@@ -21,6 +21,7 @@ export const STORAGE_KEYS = {
   tasks: 'daily-focus.tasks',
   brainDump: 'daily-focus.brainDump',
   settings: 'daily-focus.settings',
+  dailyStats: 'daily-focus.dailyStats',
 } as const
 
 export function uid(): string {

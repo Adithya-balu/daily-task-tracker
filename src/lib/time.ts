@@ -29,3 +29,27 @@ export function formatDuration(totalSeconds: number): string {
 export function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
+
+/** Formats a YYYY-MM-DD dayKey as a friendly local label, e.g. "Mon, Aug 4". */
+export function formatDayLabel(dayKey: string): string {
+  const [y, m, d] = dayKey.split('-').map(Number)
+  if (!y || !m || !d) return dayKey
+  const date = new Date(y, m - 1, d)
+  return date.toLocaleDateString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+/** Longer date for the Today header, e.g. "Tuesday, August 4". */
+export function formatTodayHeading(dayKey: string = dayKeyOf()): string {
+  const [y, m, d] = dayKey.split('-').map(Number)
+  if (!y || !m || !d) return dayKey
+  const date = new Date(y, m - 1, d)
+  return date.toLocaleDateString([], {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  })
+}

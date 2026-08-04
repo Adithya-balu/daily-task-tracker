@@ -129,12 +129,19 @@ export function usePomodoro({
       }
     }
     endsAtRef.current = null
-    setIsRunning(false)
     const nextPhase: Phase = finishedPhase === 'work' ? 'break' : 'work'
     setPhase(nextPhase)
     phaseRef.current = nextPhase
-    setRemaining(phaseDuration(nextPhase))
-  }, [flushFocused, onWorkComplete, onWorkPhaseEnd, phaseDuration])
+    const dur = phaseDuration(nextPhase)
+    setRemaining(dur)
+    // Auto-start the break so the countdown actually runs; after a break,
+    // wait for the user to start the next focus session.
+    if (nextPhase === 'break' && taskId) {
+      beginRun(dur)
+    } else {
+      setIsRunning(false)
+    }
+  }, [flushFocused, onWorkComplete, onWorkPhaseEnd, phaseDuration, beginRun])
 
   // Countdown loop.
   useEffect(() => {

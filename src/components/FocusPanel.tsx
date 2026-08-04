@@ -11,6 +11,7 @@ type Props = {
   onPauseRequest: () => void
   onComplete: (id: string) => void
   onClearFocus: () => void
+  onTitleChange: (id: string, title: string) => void
   onResumeNoteChange: (id: string, text: string) => void
   onNotesChange: (id: string, text: string) => void
 }
@@ -21,17 +22,30 @@ export function FocusPanel({
   onPauseRequest,
   onComplete,
   onClearFocus,
+  onTitleChange,
   onResumeNoteChange,
   onNotesChange,
 }: Props) {
   return (
     <section className="rounded-3xl border border-indigo-500/20 bg-gradient-to-b from-indigo-500/10 to-white/[0.02] p-6 shadow-xl">
       <div className="mb-6 flex items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-indigo-300">
             Now focusing
           </div>
-          <h2 className="truncate text-2xl font-bold text-white">{task.title}</h2>
+          <input
+            value={task.title}
+            onChange={(e) => onTitleChange(task.id, e.target.value)}
+            onBlur={(e) => {
+              const next = e.target.value.trim() || 'Untitled'
+              if (next !== task.title) onTitleChange(task.id, next)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }}
+            className="w-full truncate rounded-lg bg-transparent text-2xl font-bold text-white outline-none ring-indigo-400/40 focus:ring-2"
+            aria-label="Task title"
+          />
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
             <PriorityChip priority={task.priority} />
             <span>{task.pomodorosCompleted} pomodoros</span>
@@ -54,7 +68,16 @@ export function FocusPanel({
           isRunning={pomo.isRunning}
           remaining={pomo.remaining}
           total={pomo.total}
-          onStartResume={() => (pomo.remaining < pomo.total ? pomo.resume() : pomo.start(task.id))}
+          onStartResume={() => {
+            // Only start a fresh focus session from a full work phase.
+            // Break (and partial work) must resume the current phase — calling
+            // start() here was resetting break back to a new work timer.
+            if (pomo.phase === 'work' && pomo.remaining >= pomo.total) {
+              pomo.start(task.id)
+            } else {
+              pomo.resume()
+            }
+          }}
           onPause={onPauseRequest}
           onSkip={() => pomo.goToPhase(pomo.phase === 'work' ? 'break' : 'work', false)}
         />

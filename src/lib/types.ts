@@ -37,6 +37,13 @@ export type PomodoroSettings = {
   breakMinutes: number
 }
 
+/** Activity accrued on a calendar day (not lifetime task totals). */
+export type DailyStats = {
+  dayKey: string
+  pomodoros: number
+  focusedSeconds: number
+}
+
 export const DEFAULT_POMODORO_SETTINGS: PomodoroSettings = {
   workMinutes: 25,
   breakMinutes: 5,

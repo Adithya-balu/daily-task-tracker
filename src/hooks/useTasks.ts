@@ -3,52 +3,127 @@ import {
   DEFAULT_POMODORO_SETTINGS,
   PRIORITY_ORDER,
   type BrainDumpItem,
+  type ClaudeConfig,
   type DailyStats,
+  type PlanStep,
   type PomodoroSettings,
   type Priority,
+  type Project,
+  type Reference,
   type Task,
   type TaskStatus,
+  type TimeBlock,
 } from '../lib/types'
-import { STORAGE_KEYS, loadJSON, saveJSON, uid } from '../lib/storage'
+import type { Effect } from '../lib/agentTypes'
+import { ApiError, api, type InitialState, type StateKey } from '../lib/api'
+import { uid } from '../lib/storage'
 import { dayKeyOf } from '../lib/time'
 
 /** Backfills fields added in later versions so older stored tasks stay valid. */
 function normalizeTask(t: Task): Task {
-  return { ...t, notes: t.notes ?? '' }
+  return {
+    ...t,
+    notes: t.notes ?? '',
+    plan: t.plan ?? [],
+    references: t.references ?? [],
+    projectId: t.projectId ?? null,
+    claude: t.claude ?? {},
+    shareNotesWithClaude: t.shareNotesWithClaude ?? false,
+    sessionLog: (t.sessionLog ?? []).map((e) => ({ ...e, kind: e.kind ?? 'note' })),
+  }
 }
 
 function normalizeTasks(tasks: Task[]): Task[] {
   return tasks.map(normalizeTask)
 }
 
+type SaveErrorHandler = (key: StateKey, message: string | null) => void
+
+/** Shown when another tab or browser saved newer data; saving here stops. */
+export const CONFLICT_MESSAGE = 'conflict'
+
 /**
- * Persists `value` to localStorage, but coalesces rapid changes (e.g. typing in
- * notes) into a single write after `delay`. Flushes immediately when the tab is
- * hidden or closed so nothing is lost.
+ * Saves `value` to the local server, coalescing rapid changes (e.g. typing in
+ * notes) into one write after `delay`. Flushes immediately when the tab is
+ * hidden or closed so nothing is lost. `acks` holds ids of server effects
+ * already applied to `value`; they ride along so the server drops them only
+ * once the change is safely stored.
  */
-function useDebouncedSave<T>(key: string, value: T, delay = 400) {
+function useDebouncedSave<T>(
+  key: StateKey,
+  value: T,
+  initialRev: number,
+  onError: SaveErrorHandler,
+  acks?: React.RefObject<Set<string>>,
+  delay = 400,
+) {
   const valueRef = useRef(value)
   valueRef.current = value
+  // Last value known to be on the server; unchanged state is never re-saved
+  // (render-identity check, so it also holds under StrictMode's double effects).
+  const savedRef = useRef(value)
+  const revRef = useRef(initialRev)
+  const conflictRef = useRef(false)
+  const onErrorRef = useRef(onError)
+  onErrorRef.current = onError
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Serialize writes so an older save can never land after a newer one.
+  const chainRef = useRef<Promise<unknown>>(Promise.resolve())
+
+  const save = useCallback(
+    (keepalive: boolean) => {
+      const send = () => {
+        // Once another tab has saved newer data, this tab must reload first.
+        if (conflictRef.current) return Promise.resolve()
+        const body = valueRef.current
+        if (body === savedRef.current) return Promise.resolve()
+        const ids = acks ? [...acks.current] : []
+        const ack = ids.length ? `&ack=${ids.map(encodeURIComponent).join(',')}` : ''
+        return api<{ rev: number }>(`/state/${key}?rev=${revRef.current}${ack}`, {
+          method: 'PUT',
+          body,
+          keepalive,
+        }).then(
+          ({ rev }) => {
+            revRef.current = rev
+            savedRef.current = body
+            ids.forEach((id) => acks?.current.delete(id))
+            onErrorRef.current(key, null)
+          },
+          (err: unknown) => {
+            if (err instanceof ApiError && err.status === 409) {
+              conflictRef.current = true
+              onErrorRef.current(key, CONFLICT_MESSAGE)
+            } else {
+              onErrorRef.current(key, err instanceof Error ? err.message : String(err))
+            }
+          },
+        )
+      }
+      if (keepalive) void send()
+      else chainRef.current = chainRef.current.then(send)
+    },
+    [key, acks],
+  )
 
   useEffect(() => {
+    if (value === savedRef.current) return
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
-      saveJSON(key, valueRef.current)
       timerRef.current = null
+      save(false)
     }, delay)
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [key, value, delay])
+  }, [value, delay, save])
 
   useEffect(() => {
     const flush = () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current)
-        timerRef.current = null
-      }
-      saveJSON(key, valueRef.current)
+      if (!timerRef.current) return
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+      save(true)
     }
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') flush()
@@ -59,7 +134,7 @@ function useDebouncedSave<T>(key: string, value: T, delay = 400) {
       window.removeEventListener('pagehide', flush)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [key])
+  }, [save])
 }
 
 export function sortTasks(tasks: Task[]): Task[] {
@@ -79,31 +154,77 @@ function emptyDailyStats(dayKey: string): DailyStats {
   return { dayKey, pomodoros: 0, focusedSeconds: 0 }
 }
 
-/** Load persisted day stats; reset to zeros if they're from a previous day. */
-function loadTodayStats(today: string): DailyStats {
-  const stored = loadJSON<DailyStats | null>(STORAGE_KEYS.dailyStats, null)
+/** Use stored day stats only if they're from today. */
+function todayStatsFrom(stored: DailyStats | null, today: string): DailyStats {
   if (stored && stored.dayKey === today) return stored
   return emptyDailyStats(today)
 }
 
-export function useTasks() {
-  const today = dayKeyOf()
+/**
+ * Current local day as state, so a tab left open past midnight re-renders on
+ * its own: checked every minute and whenever the tab regains focus (timers are
+ * throttled in background tabs, and a sleeping laptop skips them entirely).
+ */
+function useToday(): string {
+  const [today, setToday] = useState(dayKeyOf)
+  useEffect(() => {
+    const check = () => setToday((prev) => {
+      const now = dayKeyOf()
+      return now === prev ? prev : now
+    })
+    const id = setInterval(check, 60_000)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') check()
+    }
+    window.addEventListener('focus', check)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(id)
+      window.removeEventListener('focus', check)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [])
+  return today
+}
 
-  const [tasks, setTasks] = useState<Task[]>(() =>
-    normalizeTasks(loadJSON<Task[]>(STORAGE_KEYS.tasks, [])),
-  )
-  const [brainDump, setBrainDump] = useState<BrainDumpItem[]>(() =>
-    loadJSON<BrainDumpItem[]>(STORAGE_KEYS.brainDump, []),
-  )
-  const [settings, setSettings] = useState<PomodoroSettings>(() =>
-    loadJSON<PomodoroSettings>(STORAGE_KEYS.settings, DEFAULT_POMODORO_SETTINGS),
-  )
-  const [dailyStats, setDailyStats] = useState<DailyStats>(() => loadTodayStats(today))
+export function useTasks(initial: InitialState) {
+  const today = useToday()
 
-  useDebouncedSave(STORAGE_KEYS.tasks, tasks)
-  useDebouncedSave(STORAGE_KEYS.brainDump, brainDump)
-  useDebouncedSave(STORAGE_KEYS.settings, settings)
-  useDebouncedSave(STORAGE_KEYS.dailyStats, dailyStats)
+  const [tasks, setTasks] = useState<Task[]>(() => normalizeTasks(initial.tasks ?? []))
+  const [projects, setProjects] = useState<Project[]>(() => initial.projects ?? [])
+  const [brainDump, setBrainDump] = useState<BrainDumpItem[]>(() => initial.brainDump ?? [])
+  const [settings, setSettings] = useState<PomodoroSettings>(
+    () => initial.settings ?? DEFAULT_POMODORO_SETTINGS,
+  )
+  const [dailyStats, setDailyStats] = useState<DailyStats>(() =>
+    todayStatsFrom(initial.dailyStats, today),
+  )
+  const [timeBlocks, setTimeBlocks] = useState<TimeBlock[]>(() => initial.timeBlocks ?? [])
+
+  // Last save error per file; any non-null value shows a banner.
+  const [saveErrors, setSaveErrors] = useState<Partial<Record<StateKey, string>>>({})
+  const onSaveError = useCallback<SaveErrorHandler>((key, message) => {
+    setSaveErrors((prev) => {
+      if ((prev[key] ?? null) === message) return prev
+      const next = { ...prev }
+      if (message) next[key] = message
+      else delete next[key]
+      return next
+    })
+  }, [])
+
+  // Server effects applied locally, waiting to be acknowledged by a save.
+  const taskAcks = useRef(new Set<string>())
+  const statsAcks = useRef(new Set<string>())
+  const appliedEffects = useRef(new Set<string>())
+
+  const revs = initial.revs ?? {}
+  useDebouncedSave('tasks', tasks, revs.tasks ?? 0, onSaveError, taskAcks)
+  useDebouncedSave('projects', projects, revs.projects ?? 0, onSaveError)
+  useDebouncedSave('brainDump', brainDump, revs.brainDump ?? 0, onSaveError)
+  useDebouncedSave('settings', settings, revs.settings ?? 0, onSaveError)
+  useDebouncedSave('dailyStats', dailyStats, revs.dailyStats ?? 0, onSaveError, statsAcks)
+  useDebouncedSave('timeBlocks', timeBlocks, revs.timeBlocks ?? 0, onSaveError)
 
   // If the calendar day changes while the app stays open, start a fresh day bucket.
   useEffect(() => {
@@ -112,24 +233,32 @@ export function useTasks() {
     }
   }, [today, dailyStats.dayKey])
 
-  const addTask = useCallback((title: string, priority: Priority): Task => {
-    const task: Task = {
-      id: uid(),
-      title: title.trim(),
-      priority,
-      status: 'todo',
-      notes: '',
-      resumeNote: '',
-      sessionLog: [],
-      pomodorosCompleted: 0,
-      focusedSeconds: 0,
-      createdAt: Date.now(),
-      completedAt: null,
-      dayKey: dayKeyOf(),
-    }
-    setTasks((prev) => [...prev, task])
-    return task
-  }, [])
+  const addTask = useCallback(
+    (title: string, priority: Priority, projectId: string | null = null): Task => {
+      const task: Task = {
+        id: uid(),
+        title: title.trim(),
+        priority,
+        status: 'todo',
+        notes: '',
+        plan: [],
+        references: [],
+        projectId,
+        claude: {},
+        shareNotesWithClaude: false,
+        resumeNote: '',
+        sessionLog: [],
+        pomodorosCompleted: 0,
+        focusedSeconds: 0,
+        createdAt: Date.now(),
+        completedAt: null,
+        dayKey: dayKeyOf(),
+      }
+      setTasks((prev) => [...prev, task])
+      return task
+    },
+    [],
+  )
 
   const updateTask = useCallback((id: string, patch: Partial<Task>) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))
@@ -137,6 +266,8 @@ export function useTasks() {
 
   const deleteTask = useCallback((id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id))
+    // Planned slots for a task that no longer exists have nothing to point at.
+    setTimeBlocks((prev) => prev.filter((b) => b.taskId !== id))
   }, [])
 
   /**
@@ -230,7 +361,10 @@ export function useTasks() {
     setTasks((prev) =>
       prev.map((t) =>
         t.id === id
-          ? { ...t, sessionLog: [...t.sessionLog, { at: Date.now(), text: trimmed }] }
+          ? {
+              ...t,
+              sessionLog: [...t.sessionLog, { at: Date.now(), text: trimmed, kind: 'note' as const }],
+            }
           : t,
       ),
     )
@@ -265,6 +399,119 @@ export function useTasks() {
     })
   }, [])
 
+  const setPlan = useCallback((id: string, plan: PlanStep[]) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, plan } : t)))
+  }, [])
+
+  const setReferences = useCallback((id: string, references: Reference[]) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, references } : t)))
+  }, [])
+
+  const setTaskProject = useCallback((id: string, projectId: string | null) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, projectId } : t)))
+  }, [])
+
+  /** Merges overrides; a field set to undefined goes back to inheriting. */
+  const setTaskClaudeConfig = useCallback((id: string, patch: Partial<ClaudeConfig>) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id !== id) return t
+        const claude: ClaudeConfig = { ...t.claude, ...patch }
+        for (const k of Object.keys(claude) as (keyof ClaudeConfig)[]) {
+          if (claude[k] === undefined) delete claude[k]
+        }
+        return { ...t, claude }
+      }),
+    )
+  }, [])
+
+  const setShareNotes = useCallback((id: string, shareNotesWithClaude: boolean) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, shareNotesWithClaude } : t)))
+  }, [])
+
+  // ---- Projects ----
+  const addProject = useCallback((name: string): Project => {
+    const project: Project = {
+      id: uid(),
+      name: name.trim() || 'Untitled project',
+      workingDir: '',
+      rules: '',
+      references: [],
+      claude: {},
+      createdAt: Date.now(),
+    }
+    setProjects((prev) => [...prev, project])
+    return project
+  }, [])
+
+  const updateProject = useCallback((id: string, patch: Partial<Project>) => {
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)))
+  }, [])
+
+  const deleteProject = useCallback((id: string) => {
+    setProjects((prev) => prev.filter((p) => p.id !== id))
+    setTasks((prev) => prev.map((t) => (t.projectId === id ? { ...t, projectId: null } : t)))
+  }, [])
+
+  // ---- Effects pushed by the local server (Claude runs) ----
+  const applyEffect = useCallback((effect: Effect) => {
+    if (appliedEffects.current.has(effect.id)) return
+    appliedEffects.current.add(effect.id)
+    if (effect.target === 'dailyStats') {
+      statsAcks.current.add(effect.id)
+      setDailyStats((prev) => {
+        const day = dayKeyOf()
+        const base = prev.dayKey === day ? prev : emptyDailyStats(day)
+        // A run that finished on an earlier day doesn't count toward today.
+        if (effect.dayKey !== day) return { ...base }
+        return {
+          ...base,
+          claudeRuns: (base.claudeRuns ?? 0) + effect.runs,
+          claudeTokens: (base.claudeTokens ?? 0) + effect.tokens,
+          claudeCostUsd: (base.claudeCostUsd ?? 0) + effect.costUsd,
+        }
+      })
+      return
+    }
+    taskAcks.current.add(effect.id)
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id !== effect.taskId) return t
+        switch (effect.kind) {
+          case 'log':
+            return { ...t, sessionLog: [...t.sessionLog, effect.entry] }
+          case 'resumeNote':
+            return { ...t, resumeNote: effect.text }
+          case 'plan':
+            return {
+              ...t,
+              plan: effect.steps.map((text) => ({
+                id: uid(),
+                text,
+                status: 'todo' as const,
+                owner: 'claude' as const,
+              })),
+            }
+        }
+      }),
+    )
+  }, [])
+
+  // ---- Time blocks (day planner) ----
+  const addBlock = useCallback((block: Omit<TimeBlock, 'id' | 'createdAt'>): TimeBlock => {
+    const created: TimeBlock = { ...block, id: uid(), createdAt: Date.now() }
+    setTimeBlocks((prev) => [...prev, created])
+    return created
+  }, [])
+
+  const updateBlock = useCallback((id: string, patch: Partial<TimeBlock>) => {
+    setTimeBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)))
+  }, [])
+
+  const deleteBlock = useCallback((id: string) => {
+    setTimeBlocks((prev) => prev.filter((b) => b.id !== id))
+  }, [])
+
   // ---- Brain dump ----
   const addDump = useCallback((text: string) => {
     const trimmed = text.trim()
@@ -294,9 +541,12 @@ export function useTasks() {
   return {
     today,
     todayStats,
+    saveErrors,
     tasks,
+    projects,
     brainDump,
     settings,
+    timeBlocks,
     setSettings,
     addTask,
     updateTask,
@@ -308,6 +558,18 @@ export function useTasks() {
     setResumeNote,
     setNotes,
     appendSessionLog,
+    setPlan,
+    setReferences,
+    setTaskProject,
+    setTaskClaudeConfig,
+    setShareNotes,
+    addProject,
+    updateProject,
+    deleteProject,
+    applyEffect,
+    addBlock,
+    updateBlock,
+    deleteBlock,
     addFocusedSeconds,
     incrementPomodoro,
     addDump,

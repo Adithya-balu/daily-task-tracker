@@ -6,3 +6,9 @@ dist-ssr
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+nohup.out
+dev-server.log
+.dev-server.plist
+
+# Local app data (tasks, Claude run logs)
+data/

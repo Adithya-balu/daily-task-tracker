@@ -112,7 +112,8 @@ export type Issue = {
   description: string
 }
 
-export type FeedbackSource = 'reviewer' | 'ci' | 'human'
+/** 'ci', 'human', or the name of the agent that raised it (e.g. 'reviewer'). */
+export type FeedbackSource = string
 
 export type Feedback = {
   id: string
@@ -139,7 +140,7 @@ export type StageRecord = {
   id: string
   stage: string
   type: StageType
-  /** How many loops had happened when this stage ran (0 = first pass). */
+  /** The pass this stage ran in (0 = first). A new pass starts on every loop or resume. */
   loopIndex: number
   /** 2 when the agent was asked again for valid output. */
   attempt: number
@@ -174,7 +175,8 @@ export type WorkflowRunStatus =
   | 'completed'
   | 'cancelled'
 
-export type EscalationReason = 'max_loops' | 'invalid_output' | 'stage_error'
+/** `budget`: max_cost_usd already spent (full cost/timeout budgets are Phase 2). */
+export type EscalationReason = 'max_loops' | 'invalid_output' | 'stage_error' | 'budget'
 
 export type LoopSummary = {
   loopIndex: number
@@ -192,8 +194,14 @@ export type WorkflowRun = {
   agents: Record<string, AgentDef & { rolePrompt: string }>
   status: WorkflowRunStatus
   currentStage: string | null
+  /** Returns to a stage already entered in the same pass. */
   loops: number
+  /** Current pass; stage records carry it as loopIndex. */
+  pass: number
+  /** Loops allowed before escalating; grows by max_loops each time you resume. */
   loopBudget: number
+  /** Spend allowed before escalating; grows by max_cost_usd each time you resume. */
+  costBudgetUsd: number
   cwd: string
   branch: string
   baseRef: string
@@ -218,4 +226,11 @@ export function latestRun(runs: WorkflowRunMap, taskId: string): WorkflowRun | u
 
 export function isActiveRun(run: WorkflowRun | undefined): boolean {
   return Boolean(run && ACTIVE_RUN_STATUSES.includes(run.status))
+}
+
+/** What a gate shows: its `show` setting, else the plan until one is approved. */
+export function gateView(run: WorkflowRun, stage: string): 'plan' | 'diff' {
+  const def = run.definition.stages[stage]
+  if (def?.type === 'gate' && def.show) return def.show
+  return run.handoff.plan && !run.handoff.planApproved ? 'plan' : 'diff'
 }

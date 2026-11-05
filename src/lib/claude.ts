@@ -54,7 +54,7 @@ function planSection(task: Task): string {
   return `## Plan\n${lines.join('\n')}`
 }
 
-function referencesSection(refs: Reference[]): string {
+export function referencesSection(refs: Reference[]): string {
   if (refs.length === 0) return ''
   const lines = refs.map((r) => {
     const label = r.label.trim() ? `${r.label.trim()}: ` : ''

@@ -38,6 +38,8 @@ export function useAgent(
   const workflowRunsRef = useRef(workflowRuns)
   workflowRunsRef.current = workflowRuns
   const [connected, setConnected] = useState(true)
+  /** Bumped when workflows or agents are edited (here or in another tab). */
+  const [aiRevision, setAiRevision] = useState(0)
   const onEffectRef = useRef(onEffect)
   onEffectRef.current = onEffect
   const titleOfRef = useRef(titleOf)
@@ -63,6 +65,10 @@ export function useAgent(
       const event = JSON.parse(m.data) as ServerEvent
       if (event.type === 'effect') {
         onEffectRef.current(event.effect)
+        return
+      }
+      if (event.type === 'ai') {
+        setAiRevision((n) => n + 1)
         return
       }
       if (event.type === 'workflow') {
@@ -149,6 +155,7 @@ export function useAgent(
     agents,
     workflowRuns,
     connected,
+    aiRevision,
     run,
     stop,
     acknowledge,

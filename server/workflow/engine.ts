@@ -6,6 +6,7 @@ import {
   type TokenUsage,
 } from '../../src/lib/agentTypes'
 import { dayKeyOf } from '../../src/lib/time'
+import type { ClaudeEffort, ClaudeModel } from '../../src/lib/types'
 import {
   DONE,
   gateView,
@@ -48,6 +49,9 @@ export type AgentStageRequest = {
   cwd: string
   mode: AgentModeDef
   ticket: Ticket
+  /** The agent's own model and effort, else the task's. */
+  model?: ClaudeModel
+  effort?: ClaudeEffort
   maxBudgetUsd: number
   /** Set on the output retry: continue the stage's own session. */
   resumeSessionId?: string
@@ -183,15 +187,16 @@ export class WorkflowEngine {
       this.starting.delete(cwd)
     }
 
+    // Deep copies, so later edits in the AI section never reach this run.
     const agents: WorkflowRun['agents'] = {}
     for (const s of Object.values(def.stages)) {
-      if (s.type === 'agent') agents[s.agent] = config.agents[s.agent]
+      if (s.type === 'agent') agents[s.agent] = structuredClone(config.agents[s.agent])
     }
     const run: WorkflowRun = {
       id,
       taskId,
       workflow: { name: def.workflow, version: def.version },
-      definition: def,
+      definition: structuredClone(def),
       agents,
       status: 'running',
       currentStage: startStage(def),
@@ -393,6 +398,8 @@ export class WorkflowEngine {
       cwd: run.cwd,
       mode,
       ticket: run.handoff.ticket,
+      model: agent.model ?? run.handoff.ticket.model,
+      effort: agent.effort ?? run.handoff.ticket.effort,
       maxBudgetUsd: Math.max(0.01, run.costBudgetUsd - run.totals.costUsd),
       resumeSessionId,
       signal,

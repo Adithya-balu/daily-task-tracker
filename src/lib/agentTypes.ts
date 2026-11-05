@@ -111,6 +111,8 @@ export type ServerEvent =
   | { type: 'effect'; effect: Effect }
   /** A task's workflow runs changed (newest first). */
   | { type: 'workflow'; taskId: string; runs: WorkflowRun[] }
+  /** Workflows or agents were edited in the AI section. */
+  | { type: 'ai' }
 
 /** Simplified run-log line sent on /api/runs/:id/events. */
 export type RunLogLine =

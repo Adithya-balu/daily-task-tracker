@@ -21,14 +21,14 @@ export function WorkflowPanel({ task, project, agentApi, onWorkflowChange }: Pro
   const [busy, setBusy] = useState(false)
   const run = agentApi.workflowRuns[task.id]?.[0]
   const active = isActiveRun(run)
-  const { listWorkflows } = agentApi
+  const { listWorkflows, aiRevision } = agentApi
 
-  // Re-read on open so edits to workflows/*.json show up.
+  // Re-read on open and after edits in the AI section.
   useEffect(() => {
     listWorkflows()
       .then(setWorkflows)
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
-  }, [listWorkflows])
+  }, [listWorkflows, aiRevision])
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true)

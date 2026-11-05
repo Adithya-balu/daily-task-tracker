@@ -447,4 +447,31 @@ describe('WorkflowEngine', () => {
     expect(stagesOf(run)).toEqual(['implement:done', 'ci:pass', 'review:approved', 'merge_approval:waiting'])
     expect(f.calls[0].prompt).not.toContain('Approved plan')
   })
+
+  it("uses an agent's own model and effort over the task's", async () => {
+    const config = structuredClone(shipped)
+    config.agents.reviewer = { ...config.agents.reviewer, model: 'haiku', effort: 'low' }
+    const g = makePorts(config)
+    const e = new WorkflowEngine(g.ports)
+    await e.start('t1', 'bugfix', ticket({ model: 'opus', effort: 'high' }))
+    await e.settled('t1')
+    const byStage = Object.fromEntries(g.calls.map((c) => [c.stage, [c.model, c.effort]]))
+    expect(byStage).toEqual({ implement: ['opus', 'high'], review: ['haiku', 'low'] })
+  })
+
+  it('keeps using its snapshot after the workflow and agents are edited', async () => {
+    const config = structuredClone(shipped)
+    const g = makePorts(config)
+    const e = new WorkflowEngine(g.ports)
+    const run = await e.start('t1', 'standard-dev', ticket())
+    await e.settled('t1')
+    expect(run.agents.coder.version).toBe(1)
+    // Edits land in the config the engine reads; the run must not see them.
+    config.workflows['standard-dev'].def.stages.implement.next.done = 'review'
+    config.agents.coder.modes.implement.instructions = 'EDITED'
+    e.decideGate('t1', 'approved', '')
+    await e.settled('t1')
+    expect(stagesOf(run).slice(2, 4)).toEqual(['implement:done', 'ci:pass'])
+    expect(g.calls.find((c) => c.stage === 'implement')!.prompt).not.toContain('EDITED')
+  })
 })

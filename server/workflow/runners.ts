@@ -2,11 +2,11 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { WorkflowRunMap } from '../../src/lib/workflowTypes'
-import { resolveDir, type AgentHub } from '../agents'
+import { BASELINE_DISALLOWED_TOOLS, type WorkflowRunMap } from '../../src/lib/workflowTypes'
+import { resolveDir, type AgentHub, type HeadlessRequest } from '../agents'
 import type { Store } from '../store'
-import { loadWorkflowConfig } from './config'
-import { WorkflowEngine, type CommandResult, type EnginePorts } from './engine'
+import { AiConfigStore } from './aiStore'
+import { WorkflowEngine, type AgentStageRequest, type CommandResult, type EnginePorts } from './engine'
 import { agentEnv, commandEnv } from './env'
 import * as git from './git'
 
@@ -14,30 +14,39 @@ import * as git from './git'
 const COMMAND_TIMEOUT_MS = 15 * 60 * 1000
 const COMMAND_OUTPUT_KEPT = 64 * 1024
 
+/** The CLI options for one agent stage. The baseline denies always apply. */
+export function headlessRequest(req: AgentStageRequest): HeadlessRequest {
+  const { ticket, mode } = req
+  return {
+    prompt: req.prompt,
+    cwd: req.cwd,
+    title: `${ticket.title} · ${req.stage}`,
+    permissionMode: mode.permissionMode,
+    allowedTools: mode.allowedTools ?? [],
+    disallowedTools: [...new Set([...BASELINE_DISALLOWED_TOOLS, ...(mode.disallowedTools ?? [])])],
+    jsonSchema: JSON.stringify(mode.outputSchema),
+    model: req.model,
+    effort: req.effort,
+    maxBudgetUsd: req.maxBudgetUsd,
+    appendSystemPrompt: req.systemPrompt,
+    addDirs: ticket.addDirs,
+    resumeSessionId: req.resumeSessionId,
+    env: agentEnv(),
+  }
+}
+
 /** The engine wired to the real Claude CLI, shell, git and data/ store. */
-export function createWorkflowEngine(root: string, store: Store, hub: AgentHub): WorkflowEngine {
-  const workflowsDir = path.join(root, 'workflows')
+export function createWorkflowEngine(
+  root: string,
+  store: Store,
+  hub: AgentHub,
+): { engine: WorkflowEngine; ai: AiConfigStore } {
+  const ai = new AiConfigStore({ builtin: path.join(root, 'workflows'), user: store.aiDir })
   const ports: EnginePorts = {
-    loadConfig: () => loadWorkflowConfig(workflowsDir),
+    loadConfig: () => ai.load(),
 
     runAgent: async (req) => {
-      const { ticket, mode } = req
-      const { runId, done } = hub.runHeadless(req.taskId, {
-        prompt: req.prompt,
-        cwd: req.cwd,
-        title: `${ticket.title} · ${req.stage}`,
-        permissionMode: mode.permissionMode,
-        allowedTools: mode.allowedTools ?? [],
-        disallowedTools: mode.disallowedTools ?? [],
-        jsonSchema: JSON.stringify(mode.outputSchema),
-        model: ticket.model,
-        effort: ticket.effort,
-        maxBudgetUsd: req.maxBudgetUsd,
-        appendSystemPrompt: req.systemPrompt,
-        addDirs: ticket.addDirs,
-        resumeSessionId: req.resumeSessionId,
-        env: agentEnv(),
-      })
+      const { runId, done } = hub.runHeadless(req.taskId, headlessRequest(req))
       req.onStart(runId)
       const onAbort = () => hub.stopRun(runId)
       req.signal.addEventListener('abort', onAbort)
@@ -77,7 +86,7 @@ export function createWorkflowEngine(root: string, store: Store, hub: AgentHub):
   }
   const engine = new WorkflowEngine(ports)
   hub.setRunGuard((taskId) => engine.guard(taskId))
-  return engine
+  return { engine, ai }
 }
 
 /** Runs a shell command; exit code 0 means pass. Output is stdout+stderr. */

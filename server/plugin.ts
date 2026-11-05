@@ -8,6 +8,7 @@ import { AgentHub, HttpError, resolveDir } from './agents'
 import { openSSE, readBody, rejectUnsafe, sendJSON } from './http'
 import { CLIENT_KEYS, Store, isClientKey } from './store'
 import { openInTerminal, openInVSCode, terminalClosed } from './terminal'
+import type { AiConfigStore } from './workflow/aiStore'
 import { WorkflowError, type WorkflowEngine } from './workflow/engine'
 import { createWorkflowEngine } from './workflow/runners'
 
@@ -23,11 +24,11 @@ export function dailyFocusApi(): Plugin {
     configureServer(server) {
       const store = new Store(server.config.root)
       const hub = new AgentHub(store)
-      const engine = createWorkflowEngine(server.config.root, store, hub)
+      const { engine, ai } = createWorkflowEngine(server.config.root, store, hub)
       server.httpServer?.on('close', () => hub.shutdown())
 
       server.middlewares.use('/api', (req, res) => {
-        handle(store, hub, engine, req, res).catch((err: unknown) => {
+        handle(store, hub, engine, ai, req, res).catch((err: unknown) => {
           if (res.headersSent) return
           if (err instanceof HttpError || err instanceof WorkflowError) sendJSON(res, err.status, { error: err.message })
           else sendJSON(res, 500, { error: err instanceof Error ? err.message : String(err) })
@@ -41,6 +42,7 @@ async function handle(
   store: Store,
   hub: AgentHub,
   engine: WorkflowEngine,
+  ai: AiConfigStore,
   req: IncomingMessage,
   res: ServerResponse,
 ) {
@@ -103,9 +105,14 @@ async function handle(
     return
   }
 
-  // GET /api/workflows - workflow files with their validation errors.
+  // GET /api/workflows - built-in and edited workflows with their validation errors.
   if (method === 'GET' && parts.length === 1 && parts[0] === 'workflows') {
     return sendJSON(res, 200, engine.listWorkflows())
+  }
+
+  // /api/ai - workflows and agents edited in the AI section.
+  if (parts[0] === 'ai') {
+    return handleAi(hub, ai, method, parts.slice(1), req, res)
   }
 
   // POST /api/check-dir - validate a working folder from the settings UI.
@@ -181,6 +188,38 @@ async function handle(
   }
 
   sendJSON(res, 404, { error: 'Not found' })
+}
+
+async function handleAi(
+  hub: AgentHub,
+  ai: AiConfigStore,
+  method: string,
+  rest: string[],
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const [kind, id] = rest
+  if (method === 'GET' && rest.length === 0) return sendJSON(res, 200, ai.load().ai)
+  if (rest.length !== 2 || (kind !== 'workflows' && kind !== 'agents')) throw new HttpError(404, 'Not found')
+
+  // PUT /api/ai/:kind/:id - create (baseVersion null) or update.
+  if (method === 'PUT') {
+    const body = await readBody<{ def?: unknown; rolePrompt?: string; baseVersion?: number | null }>(req)
+    const baseVersion = body?.baseVersion ?? null
+    const saved =
+      kind === 'workflows'
+        ? ai.saveWorkflow(id, body?.def, baseVersion)
+        : ai.saveAgent(id, body?.def, body?.rolePrompt ?? '', baseVersion)
+    hub.broadcast({ type: 'ai' })
+    return sendJSON(res, 200, saved)
+  }
+  // DELETE /api/ai/:kind/:id - delete a custom entry or reset a built-in.
+  if (method === 'DELETE') {
+    ai.remove(kind === 'workflows' ? 'workflow' : 'agent', id)
+    hub.broadcast({ type: 'ai' })
+    return sendJSON(res, 200, ai.load().ai)
+  }
+  throw new HttpError(405, 'Method not allowed')
 }
 
 async function handleWorkflow(

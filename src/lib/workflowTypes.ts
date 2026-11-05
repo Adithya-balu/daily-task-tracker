@@ -119,6 +119,21 @@ export type AiAgentEntry = {
 
 export type AiConfig = { workflows: AiWorkflowEntry[]; agents: AiAgentEntry[] }
 
+/**
+ * Denied in every workflow session whatever the agent's config says: secrets
+ * stay unreadable, and only you merge, push or move the task branch.
+ */
+export const BASELINE_DISALLOWED_TOOLS = [
+  'Read(./**/.env)',
+  'Read(./**/.env.*)',
+  'Bash(git push:*)',
+  'Bash(git merge:*)',
+  'Bash(git rebase:*)',
+  'Bash(git reset:*)',
+  'Bash(git checkout:*)',
+  'Bash(git switch:*)',
+]
+
 /** Ids of workflows and agents created in the AI section. */
 export const AI_ID = /^[a-z0-9][a-z0-9_-]{0,47}$/
 

@@ -3,14 +3,18 @@ import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Plugin } from 'vite'
 import type { RunRequest } from '../src/lib/agentTypes'
+import type { Ticket } from '../src/lib/workflowTypes'
 import { AgentHub, HttpError, resolveDir } from './agents'
 import { openSSE, readBody, rejectUnsafe, sendJSON } from './http'
 import { CLIENT_KEYS, Store, isClientKey } from './store'
 import { openInTerminal, openInVSCode, terminalClosed } from './terminal'
+import { WorkflowError, type WorkflowEngine } from './workflow/engine'
+import { createWorkflowEngine } from './workflow/runners'
 
 /**
  * Local API for Daily Focus, mounted on the Vite dev server under /api.
- * Stores app state as JSON files in data/ and runs Claude Code for tasks.
+ * Stores app state as JSON files in data/, runs Claude Code for tasks, and
+ * drives tasks through multi-agent workflows (workflows/).
  */
 export function dailyFocusApi(): Plugin {
   return {
@@ -19,12 +23,13 @@ export function dailyFocusApi(): Plugin {
     configureServer(server) {
       const store = new Store(server.config.root)
       const hub = new AgentHub(store)
+      const engine = createWorkflowEngine(server.config.root, store, hub)
       server.httpServer?.on('close', () => hub.shutdown())
 
       server.middlewares.use('/api', (req, res) => {
-        handle(store, hub, req, res).catch((err: unknown) => {
+        handle(store, hub, engine, req, res).catch((err: unknown) => {
           if (res.headersSent) return
-          if (err instanceof HttpError) sendJSON(res, err.status, { error: err.message })
+          if (err instanceof HttpError || err instanceof WorkflowError) sendJSON(res, err.status, { error: err.message })
           else sendJSON(res, 500, { error: err instanceof Error ? err.message : String(err) })
         })
       })
@@ -32,7 +37,13 @@ export function dailyFocusApi(): Plugin {
   }
 }
 
-async function handle(store: Store, hub: AgentHub, req: IncomingMessage, res: ServerResponse) {
+async function handle(
+  store: Store,
+  hub: AgentHub,
+  engine: WorkflowEngine,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
   const problem = rejectUnsafe(req)
   if (problem) return sendJSON(res, 403, { error: `Forbidden: ${problem}` })
 
@@ -48,6 +59,7 @@ async function handle(store: Store, hub: AgentHub, req: IncomingMessage, res: Se
     state.revs = store.revsFor(CLIENT_KEYS)
     state.agents = hub.getAgents()
     state.effects = hub.getEffects()
+    state.workflowRuns = engine.getRuns()
     return sendJSON(res, 200, state)
   }
 
@@ -76,7 +88,7 @@ async function handle(store: Store, hub: AgentHub, req: IncomingMessage, res: Se
   // GET /api/live - agent state + undelivered effects; fetched whenever the
   // event stream (re)connects so nothing emitted in between is missed.
   if (method === 'GET' && parts.length === 1 && parts[0] === 'live') {
-    return sendJSON(res, 200, { agents: hub.getAgents(), effects: hub.getEffects() })
+    return sendJSON(res, 200, { agents: hub.getAgents(), effects: hub.getEffects(), workflowRuns: engine.getRuns() })
   }
 
   // GET /api/events - live agent state + effects.
@@ -89,6 +101,11 @@ async function handle(store: Store, hub: AgentHub, req: IncomingMessage, res: Se
       unsubscribe()
     })
     return
+  }
+
+  // GET /api/workflows - workflow files with their validation errors.
+  if (method === 'GET' && parts.length === 1 && parts[0] === 'workflows') {
+    return sendJSON(res, 200, engine.listWorkflows())
   }
 
   // POST /api/check-dir - validate a working folder from the settings UI.
@@ -124,8 +141,14 @@ async function handle(store: Store, hub: AgentHub, req: IncomingMessage, res: Se
       return sendJSON(res, 200, { ok: true })
     }
     if (method === 'DELETE' && action === 'agent') {
+      engine.forget(taskId)
       hub.forget(taskId)
+      store.removeWorkflowFiles(taskId)
       return sendJSON(res, 200, { ok: true })
+    }
+    // /api/tasks/:id/workflow/... - start, gate decisions, resume, cancel, diffs.
+    if (action === 'workflow' && parts.length >= 4) {
+      return handleWorkflow(store, engine, taskId, method, parts.slice(3), req, res)
     }
     if (method === 'POST' && action === 'ack') {
       hub.acknowledge(taskId)
@@ -157,5 +180,64 @@ async function handle(store: Store, hub: AgentHub, req: IncomingMessage, res: Se
     }
   }
 
+  sendJSON(res, 404, { error: 'Not found' })
+}
+
+async function handleWorkflow(
+  store: Store,
+  engine: WorkflowEngine,
+  taskId: string,
+  method: string,
+  rest: string[],
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const [op, arg] = rest
+  if (method === 'POST' && op === 'start' && rest.length === 1) {
+    const body = await readBody<{ workflowId?: string; ticket?: Ticket }>(req)
+    const t = body?.ticket
+    if (!body?.workflowId || !t || typeof t.title !== 'string' || typeof t.workingDir !== 'string') {
+      throw new HttpError(400, 'Missing workflowId or ticket')
+    }
+    const ticket: Ticket = {
+      ...t,
+      notes: t.notes ?? '',
+      references: t.references ?? [],
+      plan: t.plan ?? [],
+      projectRules: t.projectRules ?? '',
+      ciCommand: t.ciCommand ?? '',
+      addDirs: t.addDirs ?? [],
+    }
+    return sendJSON(res, 200, await engine.start(taskId, body.workflowId, ticket))
+  }
+  if (method === 'POST' && op === 'gate' && rest.length === 1) {
+    const body = await readBody<{ decision?: string; comment?: string }>(req)
+    if (body?.decision !== 'approved' && body?.decision !== 'rejected') {
+      throw new HttpError(400, 'decision must be "approved" or "rejected"')
+    }
+    return sendJSON(res, 200, engine.decideGate(taskId, body.decision, body.comment ?? ''))
+  }
+  if (method === 'POST' && op === 'retry' && rest.length === 1) {
+    const body = await readBody<{ stage?: string }>(req)
+    if (!body?.stage) throw new HttpError(400, 'Missing stage')
+    return sendJSON(res, 200, engine.retryFrom(taskId, body.stage))
+  }
+  if (method === 'POST' && op === 'cancel' && rest.length === 1) {
+    return sendJSON(res, 200, engine.cancel(taskId))
+  }
+  // GET /api/tasks/:id/workflow/diff/:recordId - a stage's branch diff.
+  if (method === 'GET' && op === 'diff' && arg && rest.length === 2) {
+    let patch: string
+    try {
+      patch = fs.readFileSync(store.workflowDiffPath(taskId, arg), 'utf8')
+    } catch {
+      throw new HttpError(404, 'No diff saved for this stage.')
+    }
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+    res.setHeader('Cache-Control', 'no-store')
+    res.end(patch)
+    return
+  }
   sendJSON(res, 404, { error: 'Not found' })
 }

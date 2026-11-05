@@ -153,7 +153,7 @@ export class AgentHub {
     }
   }
 
-  private broadcast(e: ServerEvent): void {
+  broadcast(e: ServerEvent): void {
     for (const fn of this.listeners) fn(e)
   }
 

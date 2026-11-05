@@ -20,6 +20,7 @@ import {
   type Ticket,
   type WorkflowRun,
   type WorkflowRunMap,
+  type WorkflowSummary,
 } from '../../src/lib/workflowTypes'
 import { startStage, type WorkflowConfig } from './config'
 import { buildRetryPrompt, buildStagePrompt, buildStageSystemPrompt } from './prompts'
@@ -124,6 +125,11 @@ export class WorkflowEngine {
 
   getRuns(): WorkflowRunMap {
     return this.runs
+  }
+
+  /** Workflow files as they are on disk now, with validation errors. */
+  listWorkflows(): WorkflowSummary[] {
+    return this.ports.loadConfig().summaries
   }
 
   latest(taskId: string): WorkflowRun | undefined {

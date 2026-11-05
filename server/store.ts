@@ -82,6 +82,17 @@ export class Store {
   removeRunLogs(taskId: string): void {
     removeDir(path.join(this.dir, 'runs', safeSegment(taskId)))
   }
+
+  /** Branch diff saved after a workflow stage. */
+  workflowDiffPath(taskId: string, recordId: string): string {
+    const dir = path.join(this.dir, 'workflows', safeSegment(taskId))
+    fs.mkdirSync(dir, { recursive: true })
+    return path.join(dir, `${safeSegment(recordId)}.diff`)
+  }
+
+  removeWorkflowFiles(taskId: string): void {
+    removeDir(path.join(this.dir, 'workflows', safeSegment(taskId)))
+  }
 }
 
 export function removeDir(dir: string): void {

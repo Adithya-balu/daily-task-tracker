@@ -1,4 +1,5 @@
 import type { AgentMap, Effect } from './agentTypes'
+import type { WorkflowRunMap } from './workflowTypes'
 import type {
   BrainDumpItem,
   DailyStats,
@@ -54,6 +55,7 @@ export type InitialState = {
   revs: Record<StateKey, number>
   agents: AgentMap
   effects: Effect[]
+  workflowRuns: WorkflowRunMap
 }
 
 /** Error thrown for HTTP failures; `status` 409 means another tab saved first. */
@@ -65,4 +67,4 @@ export class ApiError extends Error {
   }
 }
 
-export type LiveState = { agents: AgentMap; effects: Effect[] }
+export type LiveState = { agents: AgentMap; effects: Effect[]; workflowRuns: WorkflowRunMap }

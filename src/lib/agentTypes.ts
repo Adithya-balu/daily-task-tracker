@@ -3,6 +3,7 @@
  * file free of DOM or Node imports.
  */
 import type { ClaudeConfig, SessionLogEntry } from './types'
+import type { WorkflowRun } from './workflowTypes'
 
 export type AgentStatus =
   | 'idle'
@@ -108,6 +109,8 @@ export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omi
 export type ServerEvent =
   | { type: 'agent'; taskId: string; state: AgentState }
   | { type: 'effect'; effect: Effect }
+  /** A task's workflow runs changed (newest first). */
+  | { type: 'workflow'; taskId: string; runs: WorkflowRun[] }
 
 /** Simplified run-log line sent on /api/runs/:id/events. */
 export type RunLogLine =

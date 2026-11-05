@@ -47,7 +47,7 @@ export default function App({ initial }: { initial: InitialState }) {
   const tasksRef = useRef(store.tasks)
   tasksRef.current = store.tasks
   const titleOf = useCallback((id: string) => tasksRef.current.find((t) => t.id === id)?.title, [])
-  const agent = useAgent(initial.agents, store.applyEffect, titleOf)
+  const agent = useAgent(initial.agents, initial.workflowRuns ?? {}, store.applyEffect, titleOf)
 
   const projectNames = useMemo(
     () => Object.fromEntries(store.projects.map((p) => [p.id, p.name])),
@@ -193,10 +193,10 @@ export default function App({ initial }: { initial: InitialState }) {
   const handleDelete = useCallback(
     (id: string) => {
       if (pomo.activeTaskId === id) pomo.stop()
-      if (agent.agents[id]) void agent.forget(id).catch(() => {})
+      if (agent.agents[id] || agent.workflowRuns[id]) void agent.forget(id).catch(() => {})
       store.deleteTask(id)
     },
-    [pomo.activeTaskId, pomo.stop, store.deleteTask, agent.agents, agent.forget],
+    [pomo.activeTaskId, pomo.stop, store.deleteTask, agent.agents, agent.workflowRuns, agent.forget],
   )
 
   const handleClearFocus = useCallback(() => pomo.stop(), [pomo])

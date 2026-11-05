@@ -265,3 +265,27 @@ export const STARTER_AGENTS: Record<'reviewer' | 'qa' | 'blank', StarterAgent> =
     }),
   },
 }
+
+// ---- severity rule ----
+
+function verdictsOf(def: AgentDef): string[][] {
+  return Object.values(def.modes).map((m) => m.outputSchema.properties?.verdict?.enum?.map(String) ?? [])
+}
+
+/**
+ * Keeps `outcomeFromIssues` valid after the modes change: a rule naming
+ * verdicts some mode no longer has is swapped for a template rule that fits,
+ * or dropped. `suggest` adds a template's rule when there is none.
+ */
+export function fitSeverityRule(def: AgentDef, suggest?: OutcomeFromIssues): AgentDef {
+  const all = verdictsOf(def)
+  const fits = (r: OutcomeFromIssues) => all.every((v) => v.includes(r.blocked) && v.includes(r.clear))
+  const rule = def.outcomeFromIssues
+  if (rule && fits(rule)) return def
+  const replacement = [suggest, ...Object.values(OUTPUT_TEMPLATES).map((t) => t.severityRule)].find(
+    (r): r is OutcomeFromIssues => Boolean(r && fits(r)),
+  )
+  if (!rule && !suggest) return def
+  const { outcomeFromIssues: _old, ...rest } = def
+  return replacement ? { ...rest, outcomeFromIssues: { ...replacement, blocking: rule?.blocking ?? replacement.blocking } } : rest
+}

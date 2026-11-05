@@ -12,6 +12,8 @@ const TYPE_HELP: Record<StageType, string> = {
 }
 
 const selectClass = `${inputClass} bg-slate-900`
+/** inputClass without its full width, for fields sized inline. */
+const inlineClass = inputClass.replace('w-full ', '')
 
 type Props = {
   id: string
@@ -72,7 +74,7 @@ export function StageCard({
           onBlur={commitName}
           onKeyDown={(e) => e.key === 'Enter' && commitName()}
           aria-label="Stage id"
-          className={`${inputClass} w-44 font-mono`}
+          className={`${inlineClass} w-44 font-mono`}
         />
         <select
           value={stage.type}
@@ -81,7 +83,7 @@ export function StageCard({
             onChange(syncTransitions({ ...newStage(type, agents), next: stage.next }, agents))
           }}
           aria-label="Stage type"
-          className={`${selectClass} w-32`}
+          className={`${inlineClass} w-32 bg-slate-900`}
         >
           <option value="agent">agent</option>
           <option value="command">command</option>
@@ -186,7 +188,7 @@ export function StageCard({
                   value={target ?? ''}
                   onChange={(e) => onChange({ ...stage, next: { ...stage.next, [o]: e.target.value } })}
                   aria-label={`Next stage after ${o}`}
-                  className={`${selectClass} max-w-56 py-1.5`}
+                  className={`${inlineClass} w-56 bg-slate-900 py-1.5`}
                 >
                   {target === undefined && <option value="">(choose)</option>}
                   {missing && <option value={target}>{target} (missing)</option>}

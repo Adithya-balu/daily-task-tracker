@@ -8,6 +8,7 @@ import {
   applyPreset,
   buildOutputSchema,
   describeOutput,
+  fitSeverityRule,
   isBaselineRule,
   modeWarnings,
 } from './agentTemplates'
@@ -75,5 +76,30 @@ describe('presets and warnings', () => {
   it('knows the locked baseline rules', () => {
     expect(isBaselineRule('Bash(git push:*)')).toBe(true)
     expect(isBaselineRule('Bash(git commit:*)')).toBe(false)
+  })
+})
+
+describe('fitSeverityRule', () => {
+  const reviewer = shipped.agents.reviewer
+  const withVerdicts = (verdicts: string[], fields: ('issues' | 'plan')[] = ['issues']) => ({
+    ...reviewer,
+    modes: { default: { ...reviewer.modes.default, outputSchema: buildOutputSchema(verdicts, fields) } },
+  })
+
+  it('keeps a rule that still fits', () => {
+    expect(fitSeverityRule(reviewer)).toBe(reviewer)
+  })
+
+  it('swaps to a template rule that fits, keeping the blocking severities', () => {
+    const def = { ...withVerdicts(['pass', 'fail']), outcomeFromIssues: { ...reviewer.outcomeFromIssues!, blocking: ['blocker' as const] } }
+    expect(fitSeverityRule(def).outcomeFromIssues).toEqual({ blocking: ['blocker'], blocked: 'fail', clear: 'pass' })
+    expect(validateAgent(fitSeverityRule(def))).toEqual([])
+  })
+
+  it('drops a rule nothing fits, and adds a suggested one', () => {
+    expect(fitSeverityRule(withVerdicts(['done'], [])).outcomeFromIssues).toBeUndefined()
+    const { outcomeFromIssues: _r, ...bare } = withVerdicts(['pass', 'fail'])
+    expect(fitSeverityRule(bare)).toBe(bare)
+    expect(fitSeverityRule(bare, OUTPUT_TEMPLATES.check.severityRule).outcomeFromIssues?.blocked).toBe('fail')
   })
 })

@@ -68,8 +68,14 @@ export type OutcomeFromIssues = { blocking: IssueSeverity[]; blocked: string; cl
 
 export type AgentDef = {
   agent: string
-  /** Role prompt markdown file, relative to workflows/agents/. */
+  /** Raised on every save in the AI section; runs record it in their snapshot. */
+  version?: number
+  description?: string
+  /** Role prompt markdown file, next to the agent's JSON file. */
   prompt: string
+  /** Override the task's model and effort for this agent's sessions. */
+  model?: ClaudeModel
+  effort?: ClaudeEffort
   modes: Record<string, AgentModeDef>
   outcomeFromIssues?: OutcomeFromIssues
   /** Knowledge layers this agent receives (Phase 3; accepted and ignored for now). */
@@ -84,6 +90,37 @@ export type WorkflowSummary = {
   valid: boolean
   errors: string[]
 }
+
+// ---- AI section (GET /api/ai) ----
+
+/**
+ * builtin: shipped in workflows/, unchanged. modified: your edit of a built-in
+ * (can be reset). custom: created by you (can be deleted).
+ */
+export type AiEntrySource = 'builtin' | 'modified' | 'custom'
+
+export type AiWorkflowEntry = {
+  id: string
+  /** As stored; may be malformed if the file was hand-edited. */
+  def: WorkflowDef | null
+  source: AiEntrySource
+  errors: string[]
+}
+
+export type AiAgentEntry = {
+  id: string
+  def: AgentDef | null
+  rolePrompt: string
+  source: AiEntrySource
+  errors: string[]
+  /** Workflows with a stage that uses this agent. */
+  usedBy: string[]
+}
+
+export type AiConfig = { workflows: AiWorkflowEntry[]; agents: AiAgentEntry[] }
+
+/** Ids of workflows and agents created in the AI section. */
+export const AI_ID = /^[a-z0-9][a-z0-9_-]{0,47}$/
 
 // ---- runtime (data/workflowRuns.json) ----
 

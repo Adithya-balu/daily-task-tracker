@@ -65,12 +65,13 @@ export class Store {
     }
   }
 
-  /** Write to a temp file then rename, so a crash never leaves half a file. */
   write(name: string, value: unknown): void {
-    const target = this.file(name)
-    const tmp = `${target}.${process.pid}.tmp`
-    fs.writeFileSync(tmp, JSON.stringify(value, null, 2))
-    fs.renameSync(tmp, target)
+    writeFileAtomic(this.file(name), JSON.stringify(value, null, 2))
+  }
+
+  /** Workflows and agents edited in the AI section. */
+  get aiDir(): string {
+    return path.join(this.dir, 'ai')
   }
 
   runLogPath(taskId: string, runId: string): string {
@@ -93,6 +94,14 @@ export class Store {
   removeWorkflowFiles(taskId: string): void {
     removeDir(path.join(this.dir, 'workflows', safeSegment(taskId)))
   }
+}
+
+/** Write to a temp file then rename, so a crash never leaves half a file. */
+export function writeFileAtomic(file: string, text: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const tmp = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(tmp, text)
+  fs.renameSync(tmp, file)
 }
 
 export function removeDir(dir: string): void {

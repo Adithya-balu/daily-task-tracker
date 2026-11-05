@@ -12,6 +12,7 @@ import {
   type StageType,
   type WorkflowDef,
 } from './workflowTypes'
+import { CLAUDE_EFFORTS, CLAUDE_MODELS, type ClaudeEffort, type ClaudeModel } from './types'
 
 export const STAGE_TYPES: StageType[] = ['agent', 'command', 'gate']
 export const PERMISSION_MODES: PermissionMode[] = ['plan', 'default', 'acceptEdits']
@@ -49,6 +50,15 @@ export function validateAgent(raw: unknown): string[] {
   if (!isObject(raw)) return ['agent definition must be an object']
   if (typeof raw.agent !== 'string' || !raw.agent) errors.push('agent: required string')
   if (typeof raw.prompt !== 'string' || !raw.prompt) errors.push('prompt: required markdown file name')
+  if (raw.version !== undefined && (!Number.isInteger(raw.version) || (raw.version as number) < 1)) {
+    errors.push('version: must be a positive integer')
+  }
+  if (raw.model !== undefined && !CLAUDE_MODELS.includes(raw.model as ClaudeModel)) {
+    errors.push(`model: must be one of ${CLAUDE_MODELS.join(', ')}`)
+  }
+  if (raw.effort !== undefined && !CLAUDE_EFFORTS.includes(raw.effort as ClaudeEffort)) {
+    errors.push(`effort: must be one of ${CLAUDE_EFFORTS.join(', ')}`)
+  }
   if (!isObject(raw.modes) || Object.keys(raw.modes).length === 0) {
     errors.push('modes: at least one mode is required')
     return errors

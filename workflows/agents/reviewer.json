@@ -1,5 +1,6 @@
 {
   "agent": "reviewer",
+  "version": 1,
   "prompt": "reviewer.md",
   "knowledge": ["shared", "agent"],
   "outcomeFromIssues": {

@@ -1,5 +1,6 @@
 {
   "agent": "coder",
+  "version": 1,
   "prompt": "coder.md",
   "knowledge": ["shared"],
   "modes": {

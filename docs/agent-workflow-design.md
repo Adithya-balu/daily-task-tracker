@@ -112,7 +112,7 @@ type Ports = {
   5. Feedback the stage received is marked consumed.
 - **Command stage**: substitutes `{{project.ciCommand}}`, runs `/bin/sh -c` in the run's cwd with a 15-minute safety timeout, and maps exit 0 to `pass`, anything else to `fail`. On failure, the last 8KB of output is added to the feedback.
 - **Gate stage**: the record is `waiting` and the run is `awaiting_gate`. `decideGate(taskId, 'approved'|'rejected', comment)` resumes the run. A rejection comment becomes `human` feedback. Approving `plan_approval` sets `planApproved` and emits the existing `plan` effect, so the Plan tab fills.
-- **Loops**: the run tracks a *pass*. A transition back to a stage already entered in the current pass counts as one loop and starts a new pass, so forward moves on a later pass aren't counted again. Stage records carry their pass as `loopIndex`. A manual resume also starts a new pass but isn't counted as a loop. If it would exceed `loopBudget` (initially `max_loops`), the run escalates with `max_loops` and a `LoopSummary[]`: for each loop, its stages, outcomes, summaries and issues.
+- **Loops**: the run tracks a *pass*. A transition back to a stage already entered in the current pass counts as one loop and starts a new pass, so forward moves on a later pass aren't counted again. Stage records carry their pass as `loopIndex`. A manual resume, or a rejection at a gate, also starts a new pass but isn't counted as a loop: `max_loops` limits agents going back and forth unattended, and a gate rejection is you steering. The cost limit still bounds repeated rejections. If it would exceed `loopBudget` (initially `max_loops`), the run escalates with `max_loops` and a `LoopSummary[]`: for each loop, its stages, outcomes, summaries and issues.
 - **Transitions** come only from the outcome. A run error (process crash, non-success result) fails the stage and escalates with `stage_error`.
 - **Resume or retry**: `retryFrom(taskId, stage)` is allowed when the run is escalated or interrupted. Resuming after `max_loops` adds another `max_loops` to `loopBudget`. `cancel(taskId)` stops the active process.
 - **Restart recovery**: on load, runs left `running` become `interrupted`, so you can resume from the current stage.
@@ -160,5 +160,5 @@ Routes, all under `server/plugin.ts`, following the existing style:
 - Scrubbing secrets from the env is a heuristic, not isolation. Real isolation would need a container or sandbox.
 - The CLI may end without `structured_output` (max turns, budget cap). That is handled by the retry and escalation path.
 - The reviewer's override of its own verdict by severity is a policy choice; it is visible in the UI as "normalized".
-- Gate rejections count toward `max_loops`. Open question: should they?
+- Gate rejections don't count toward `max_loops` (decided after Phase 1 review). A separate `max_rejections` limit could be added later if needed.
 

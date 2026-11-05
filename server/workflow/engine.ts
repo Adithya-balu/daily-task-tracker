@@ -345,8 +345,13 @@ export class WorkflowEngine {
       this.persist(run)
       return
     }
-    // Going back to a stage already entered in this pass is a loop.
-    if (run.stages.some((r) => r.stage === target && r.loopIndex === run.pass)) {
+    // Going back to a stage already entered in this pass is a loop. A gate
+    // rejection is you steering, not agents bouncing, so it starts a new pass
+    // without using up the loop budget.
+    const revisit = run.stages.some((r) => r.stage === target && r.loopIndex === run.pass)
+    if (revisit && run.definition.stages[from].type === 'gate') {
+      run.pass++
+    } else if (revisit) {
       if (run.loops >= run.loopBudget) {
         run.currentStage = target
         this.escalate(

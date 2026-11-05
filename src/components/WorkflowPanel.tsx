@@ -109,7 +109,7 @@ function RunHeader({ run, busy, onCancel }: { run: WorkflowRun; busy: boolean; o
         <span>
           Branch <code className="font-mono text-slate-300">{run.branch}</code>
         </span>
-        <span title="Returns to an earlier stage, out of the loops allowed before it escalates to you">
+        <span title="Times CI or the reviewer sent work back, out of the loops allowed before it escalates to you. Your gate rejections don't count.">
           Loops {run.loops}/{run.loopBudget}
         </span>
         <span title="Estimated cost at API prices, out of the workflow's budget">

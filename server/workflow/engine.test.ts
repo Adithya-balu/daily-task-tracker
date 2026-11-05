@@ -314,17 +314,39 @@ describe('WorkflowEngine', () => {
     expect(f.calls).toHaveLength(1)
   })
 
-  it('a plan rejection sends the comment back to analysis and counts as a loop', async () => {
+  it('a plan rejection sends the comment back to analysis without using a loop', async () => {
     const run = await startAndSettle()
     engine.decideGate('t1', 'rejected', 'Use the existing auth module')
     await engine.settled('t1')
-    expect(run.loops).toBe(1)
+    expect(run.loops).toBe(0)
+    expect(run.pass).toBe(1)
     expect(run.currentStage).toBe('plan_approval')
     expect(run.handoff.planApproved).toBe(false)
     const second = f.calls.filter((c) => c.stage === 'analysis')[1]
     expect(second.prompt).toContain('From the user (after plan_approval)')
     expect(second.prompt).toContain('Use the existing auth module')
     expect(run.stages[1]).toMatchObject({ outcome: 'rejected', comment: 'Use the existing auth module' })
+  })
+
+  it('gate rejections never escalate for max_loops, but agent loops still count', async () => {
+    const run = await startAndSettle()
+    for (let i = 0; i < 5; i++) {
+      engine.decideGate('t1', 'rejected', `Not yet (${i})`)
+      await engine.settled('t1')
+    }
+    expect(run.status).toBe('awaiting_gate')
+    expect(run.currentStage).toBe('plan_approval')
+    expect(run.loops).toBe(0)
+
+    f.exit('npm test', 1, 0)
+    await approve()
+    expect(run.currentStage).toBe('merge_approval')
+    expect(run.loops).toBe(1)
+    engine.decideGate('t1', 'rejected', 'Rename the helper')
+    await engine.settled('t1')
+    expect(run.status).toBe('awaiting_gate')
+    expect(run.currentStage).toBe('merge_approval')
+    expect(run.loops).toBe(1)
   })
 
   it('rejects gate decisions when not waiting at a gate', async () => {

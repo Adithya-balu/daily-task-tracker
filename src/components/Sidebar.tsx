@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { THEMES, type Theme } from '../lib/theme'
 
-export type View = 'today' | 'plan' | 'history'
+export type View = 'today' | 'plan' | 'history' | 'ai'
 
 type Counts = {
   /** Tasks finished today (shown next to Today). */
@@ -39,6 +39,10 @@ function groupsFor(counts: Counts): NavGroup[] {
     {
       title: "Today's plan",
       items: [{ view: 'plan', label: 'Plan', icon: <CalendarIcon />, count: counts.blocks }],
+    },
+    {
+      title: 'AI',
+      items: [{ view: 'ai', label: 'Workflows & agents', icon: <SparkIcon />, count: 0 }],
     },
   ]
 }
@@ -287,6 +291,15 @@ function CalendarIcon() {
     <svg {...iconProps}>
       <rect x="3" y="5" width="18" height="16" rx="2" />
       <path d="M3 10h18M8 3v4M16 3v4M7 14h4v4H7z" />
+    </svg>
+  )
+}
+
+function SparkIcon() {
+  return (
+    <svg {...iconProps}>
+      <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" />
+      <path d="M19 15l.7 1.8 1.8.7-1.8.7L19 20l-.7-1.8-1.8-.7 1.8-.7L19 15z" />
     </svg>
   )
 }

@@ -9,6 +9,7 @@ import { FocusPanel } from './components/FocusPanel'
 import { PauseNotePrompt } from './components/PauseNotePrompt'
 import { BrainDumpInbox } from './components/BrainDumpInbox'
 import { SettingsDialog } from './components/SettingsDialog'
+import { AiSection } from './components/ai/AiSection'
 import { TaskWorkspace } from './components/TaskWorkspace'
 import { HistoryPanel } from './components/HistoryPanel'
 import { ProjectsDialog } from './components/ProjectsDialog'
@@ -405,6 +406,8 @@ export default function App({ initial }: { initial: InitialState }) {
             <kbd className="rounded bg-white/10 px-1.5">space</kbd> start / pause
           </footer>
         </>
+      ) : view === 'ai' ? (
+        <AiSection revision={agent.aiRevision} />
       ) : view === 'plan' ? (
         <DayPlanner
           dayKey={planDay}
@@ -492,12 +495,14 @@ const PAGE_TITLE: Record<View, string> = {
   today: 'Today',
   plan: "Today's plan",
   history: 'History',
+  ai: 'AI',
 }
 
 const PAGE_SUBTITLE: Record<View, string> = {
   today: 'One task at a time',
   plan: 'Block your time, then focus on one block at a time',
   history: 'What you finished on earlier days',
+  ai: 'Workflows and the agents they run',
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

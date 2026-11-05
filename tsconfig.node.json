@@ -14,5 +14,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["server", "vite.config.ts", "src/lib/agentTypes.ts", "src/lib/types.ts"]
+  "include": ["server", "vite.config.ts", "vitest.config.ts", "src/lib/agentTypes.ts", "src/lib/types.ts"]
 }

@@ -50,6 +50,7 @@ Headless runs can't ask for permission, so tools that aren't allowed by the perm
 
 A task can also go through a **workflow**: a sequence of agents (coder, reviewer) and checks, defined in config, with you approving key steps. Agents never call each other. The app starts each stage in a **fresh headless session**, reads the stage's structured verdict, and picks the next stage from the workflow's transitions. Design: [docs/agent-workflow-design.md](docs/agent-workflow-design.md).
 
+- **Editing in the app**: the sidebar's **AI → Workflows & agents** view edits workflows and agents with forms. See [AI section](#ai-section) below.
 - **Config** lives in `workflows/`, not in code. `workflows/<id>.json` is a state machine of stages, each with a type and `next` transitions keyed by outcome:
   - `agent`: runs an agent from `workflows/agents/<name>.json`. That file holds its role prompt (`.md`), permission mode, allowed and denied tools, and an output schema. The schema's `verdict` enum is the stage's outcomes.
   - `command`: runs a shell command in the working folder (`pass`/`fail` by exit code). `{{project.ciCommand}}` is the project's **Test & lint command**.
@@ -64,8 +65,25 @@ A task can also go through a **workflow**: a sequence of agents (coder, reviewer
 - **Verdicts**: if an agent's output is missing or doesn't match its schema, the app asks the same session once more. After that, the stage fails and the task escalates to you. The reviewer's outcome follows issue severity: only `blocker` and `major` issues request changes.
 - **Limits and escalation**: a return to a stage already visited in the same pass counts as a loop, unless it comes from your rejection at a gate. Going past `max_loops`, or spending `max_cost_usd`, pauses the task and escalates it to you with a summary of every loop. From there you can **Resume from** any stage.
 - **Timeline**: every stage is shown with its verdict, summary, issues, duration, tokens and cost, plus links to its session log, diff and command output. Gates and escalations appear in **Needs you** and trigger a notification.
-- **Safety**: workflow sessions and commands get an environment with credential-like variables removed. Agents are denied reading `.env` files, and the reviewer can only read files and run read-only git commands. This is a heuristic, not a sandbox.
+- **Safety**: workflow sessions and commands get an environment with credential-like variables removed. Every agent session is also denied reading `.env` files and running `git push`, `merge`, `rebase`, `reset`, `checkout` and `switch`, whatever its config allows. The shipped reviewer can only read files and run read-only git commands. This is a heuristic, not a sandbox.
 - Tasks without a workflow behave exactly as before. While a workflow is active on a task, manual Claude runs on that task are blocked.
+
+## AI section
+
+**AI → Workflows & agents** in the sidebar edits the config without touching files by hand. Design: [docs/ai-section-design.md](docs/ai-section-design.md).
+
+- **Where edits go**: the files in `workflows/` are the built-in defaults and are never changed by the app. Your edits are saved in `data/ai/` in the same format, and override a built-in with the same id. Each entry is labelled **Built-in**, **Modified** (can be reset to default) or **Custom** (can be deleted). To make an edit the new default, copy its file from `data/ai/` into `workflows/`.
+- **Versions**: every save raises the version. Runs keep a copy of the workflow and agents they started with, so edits only affect runs started afterwards.
+- **Workflows tab**: description, start stage, limits, and a card per stage. Each card has its type, agent and mode (or command, or what a gate shows), and a dropdown for where each outcome goes. A one-line preview shows the main path and its loops. Errors show live, and an invalid workflow can't be saved.
+- **Agents tab**: role prompt, description, and model and effort (which override the task's when set). Each mode has:
+  - instructions;
+  - a permission mode and allowed/denied tools, with presets (plan only, read-only, read + git, read + run commands, edit code). The always-denied rules are shown locked, and risky combinations get a warning;
+  - an output from a template (plan, implement, review, check, custom verdicts), or a raw JSON schema.
+
+  The **severity rule** (which issue severities send work back) can be edited too.
+- **Safe edits**: an agent change that would break a workflow using it, such as removing a mode or a verdict, can't be saved. An agent used by a workflow can't be deleted.
+- **New entries** start blank or as a copy. New agents can also start from a reviewer-like, QA-like or blank starter. Ids are fixed once created; use **Duplicate** to make a renamed copy.
+- The knowledge base for agents is planned for Phase 3.
 
 ## Getting started
 
@@ -86,7 +104,7 @@ That starts Vite under launchd (not as a Cursor child). Stop it with `npm run de
 
 Your data lives in `data/` (gitignored) and is served by the dev server, so the app needs `npm run dev` / `npm run dev:detach` running. The first time it loads, anything the older localStorage version saved is copied into `data/` (localStorage is left untouched as a backup).
 
-Run the tests (workflow engine, config validation, verdicts, git helpers):
+Run the tests (workflow engine, config validation and saving, verdicts, templates, git helpers):
 
 ```bash
 npm test
@@ -114,12 +132,13 @@ server/
   terminal.ts                # Open in Terminal + session usage sync
   http.ts                    # JSON / SSE helpers, localhost guard
   workflow/
-    config.ts                # load + validate workflows/ and agents
+    config.ts                # load workflows/ + data/ai overrides, validate
+    aiStore.ts               # save / reset / delete AI-section edits (versioned)
     engine.ts                # workflow state machine (UI-independent, behind ports)
     verdict.ts, prompts.ts   # output schema checks, stage prompts from the handoff
     runners.ts, git.ts, env.ts # real ports: headless Claude, shell, git branch, scrubbed env
 workflows/                   # workflow definitions + agents/ (definitions and role prompts)
-docs/agent-workflow-design.md
+docs/agent-workflow-design.md, docs/ai-section-design.md
 src/
   App.tsx                    # layout, view routing, orchestration
   components/
@@ -130,6 +149,7 @@ src/
     TaskWorkspace.tsx        # task drawer: Plan / Notes / References / Claude / Workflow / Activity
     WorkflowPanel.tsx        # start a workflow, gates, escalations
     WorkflowTimeline.tsx     # per-stage timeline, issues, diffs
+    ai/                      # AI section: AiSection, WorkflowEditor, StageCard, AgentEditor, ModeEditor
     PlanEditor.tsx           # ordered plan steps with status + owner
     ReferencesPanel.tsx      # links, files, snippets (optionally sent to Claude)
     ClaudePanel.tsx          # run controls, live log, run history, settings, prompt preview
@@ -147,9 +167,12 @@ src/
   hooks/
     useTasks.ts              # state + server persistence + daily rollover + server effects
     useAgent.ts              # live Claude state over SSE + run/stop/terminal actions
+    useAiConfig.ts           # AI section: load + save workflows and agents
     usePomodoro.ts           # single-active countdown + focus accounting
   lib/
     types.ts, agentTypes.ts, workflowTypes.ts  # app + shared client/server types
+    workflowValidate.ts      # workflow/agent validation (shared by server and editors)
+    workflowEdit.ts, agentTemplates.ts  # editor helpers: stage edits, output templates, presets
     claude.ts                # settings inheritance + prompt builder
     api.ts, storage.ts, time.ts, format.ts, notify.ts
 ```

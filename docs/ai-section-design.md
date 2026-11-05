@@ -152,4 +152,13 @@ All routes go in `server/plugin.ts`, following the existing route style.
 - **Knowledge base:** Phase 3. The `knowledge` field stays accepted but ignored, and there's no Knowledge tab yet.
 - **Graph diagram:** none; only the text flow preview.
 - **History:** older versions aren't kept, so there's no undo beyond Reset to default. Runs still record their version and a snapshot of the definition, so you can always see what a past run used.
-- **Open question:** should **Reset to default** on a modified built-in also be blocked while a run is waiting at a gate? I think no, because the run uses its snapshot.
+- **Decided:** **Reset to default** isn't blocked while a run of that workflow is active, because the run uses its own snapshot.
+
+## 11. As built
+- **Save logic location:** the save/reset/delete logic lives in `server/workflow/aiStore.ts` (`AiConfigStore`), not in `config.ts`. This avoids an import cycle with the engine's `WorkflowError`.
+- **Checking a change:** every save and delete is checked against the whole merged config before it's written. Any workflow that was valid and would become invalid blocks the change, so a deleted agent, a removed mode, or a changed verdict list can't slip through. The agent editor runs the same check live.
+- **Versions after reset:** versions never repeat after a reset. `data/ai/versions.json` keeps the highest version used for each id.
+- **Snapshot copies:** runs now deep-copy their workflow and agent snapshot when they start. The new tests showed that a shallow copy shared objects with the loaded config.
+- **Editor helpers:**
+  - `src/lib/workflowEdit.ts` holds the form's stage operations: rename, which also updates transitions; move; remove; syncing transitions to a stage's outcomes; and the flow preview.
+  - `src/lib/agentTemplates.ts` holds the output templates, which can also be read back from an existing schema, plus the presets, the starter agents, the warnings, and `fitSeverityRule`, which keeps the severity rule valid as verdicts change.

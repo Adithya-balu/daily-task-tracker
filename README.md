@@ -46,6 +46,27 @@ Headless runs can't ask for permission, so tools that aren't allowed by the perm
 
 **Security**: the API runs code on your machine. It's served only by the Vite dev server on `127.0.0.1`, rejects non-localhost Host/Origin headers and cross-site requests, and requires an `X-Daily-Focus` header on every state-changing request.
 
+## Agent workflows
+
+A task can also go through a **workflow**: a sequence of agents (coder, reviewer) and checks, defined in config, with you approving key steps. Agents never call each other. The app starts each stage in a **fresh headless session**, reads the stage's structured verdict, and picks the next stage from the workflow's transitions. Design: [docs/agent-workflow-design.md](docs/agent-workflow-design.md).
+
+- **Config** lives in `workflows/`, not in code. `workflows/<id>.json` is a state machine of stages, each with a type and `next` transitions keyed by outcome:
+  - `agent`: runs an agent from `workflows/agents/<name>.json`. That file holds its role prompt (`.md`), permission mode, allowed and denied tools, and an output schema. The schema's `verdict` enum is the stage's outcomes.
+  - `command`: runs a shell command in the working folder (`pass`/`fail` by exit code). `{{project.ciCommand}}` is the project's **Test & lint command**.
+  - `gate`: waits for you to approve, or reject with a comment.
+  - `limits`: `max_loops`, `max_cost_usd`, `timeout_minutes`.
+- **Validation**: files are checked when listed and started. The checks cover unknown stages, agents and modes; missing or unknown transitions; unreachable stages; and loops that can never reach `done`. Invalid workflows show their errors and can't start.
+- **Shipped workflows**:
+  - `standard-dev`: plan → your approval → implement → CI → review → your merge approval. CI failure and review rejection go back to implement.
+  - `bugfix`: the same without the plan step.
+- **How to run one**: pick a workflow on the task's **Workflow** tab and press **Start workflow**. The working folder must be a git repository with a clean working tree. The app creates and checks out `daily-focus/<task>-<id>` and commits each implement stage there. **Nothing is merged or pushed**: merging stays your job.
+- **Handoff, not shared sessions**: each stage's prompt is built from the task's handoff record. That record holds the ticket, the approved plan, the branch, earlier stages' summaries, and outstanding feedback from CI, the reviewer, or your rejection comments.
+- **Verdicts**: if an agent's output is missing or doesn't match its schema, the app asks the same session once more. After that, the stage fails and the task escalates to you. The reviewer's outcome follows issue severity: only `blocker` and `major` issues request changes.
+- **Limits and escalation**: a return to a stage already visited in the same pass counts as a loop. Going past `max_loops`, or spending `max_cost_usd`, pauses the task and escalates it to you with a summary of every loop. From there you can **Resume from** any stage.
+- **Timeline**: every stage is shown with its verdict, summary, issues, duration, tokens and cost, plus links to its session log, diff and command output. Gates and escalations appear in **Needs you** and trigger a notification.
+- **Safety**: workflow sessions and commands get an environment with credential-like variables removed. Agents are denied reading `.env` files, and the reviewer can only read files and run read-only git commands. This is a heuristic, not a sandbox.
+- Tasks without a workflow behave exactly as before. While a workflow is active on a task, manual Claude runs on that task are blocked.
+
 ## Getting started
 
 ```bash
@@ -64,6 +85,12 @@ npm run dev:detach
 That starts Vite under launchd (not as a Cursor child). Stop it with `npm run dev:stop`.
 
 Your data lives in `data/` (gitignored) and is served by the dev server, so the app needs `npm run dev` / `npm run dev:detach` running. The first time it loads, anything the older localStorage version saved is copied into `data/` (localStorage is left untouched as a backup).
+
+Run the tests (workflow engine, config validation, verdicts, git helpers):
+
+```bash
+npm test
+```
 
 To type-check and build (note: `vite preview` serves the UI only, without the local API):
 
@@ -86,6 +113,13 @@ server/
   agents.ts                  # Claude run manager (spawn claude -p, stream, summarize)
   terminal.ts                # Open in Terminal + session usage sync
   http.ts                    # JSON / SSE helpers, localhost guard
+  workflow/
+    config.ts                # load + validate workflows/ and agents
+    engine.ts                # workflow state machine (UI-independent, behind ports)
+    verdict.ts, prompts.ts   # output schema checks, stage prompts from the handoff
+    runners.ts, git.ts, env.ts # real ports: headless Claude, shell, git branch, scrubbed env
+workflows/                   # workflow definitions + agents/ (definitions and role prompts)
+docs/agent-workflow-design.md
 src/
   App.tsx                    # layout, view routing, orchestration
   components/
@@ -93,7 +127,9 @@ src/
     Board.tsx                # drag-and-drop kanban board (To do / In progress / Done)
     HistoryPanel.tsx         # past completed tasks grouped by day
     NotesEditor.tsx          # notes with interactive markdown checklists (edit/preview)
-    TaskWorkspace.tsx        # task drawer: Plan / Notes / References / Claude / Activity
+    TaskWorkspace.tsx        # task drawer: Plan / Notes / References / Claude / Workflow / Activity
+    WorkflowPanel.tsx        # start a workflow, gates, escalations
+    WorkflowTimeline.tsx     # per-stage timeline, issues, diffs
     PlanEditor.tsx           # ordered plan steps with status + owner
     ReferencesPanel.tsx      # links, files, snippets (optionally sent to Claude)
     ClaudePanel.tsx          # run controls, live log, run history, settings, prompt preview
@@ -101,7 +137,7 @@ src/
     RunLog.tsx               # streamed run output
     ActivityTimeline.tsx     # pause notes + Claude runs + terminal sessions
     ProjectsDialog.tsx       # projects: folder, rules, Claude defaults, references
-    NeedsYouStrip.tsx        # Claude work waiting on you
+    NeedsYouStrip.tsx        # Claude work and workflow gates waiting on you
     FocusPanel.tsx           # active task: timer + notes + resume note + session log
     PomodoroTimer.tsx        # circular countdown + controls
     PauseNotePrompt.tsx      # "what I did / next step" capture on pause
@@ -113,7 +149,7 @@ src/
     useAgent.ts              # live Claude state over SSE + run/stop/terminal actions
     usePomodoro.ts           # single-active countdown + focus accounting
   lib/
-    types.ts, agentTypes.ts  # app + shared client/server types
+    types.ts, agentTypes.ts, workflowTypes.ts  # app + shared client/server types
     claude.ts                # settings inheritance + prompt builder
     api.ts, storage.ts, time.ts, format.ts, notify.ts
 ```

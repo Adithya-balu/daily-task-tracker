@@ -348,7 +348,12 @@ export default function App({ initial }: { initial: InitialState }) {
             </div>
           )}
 
-          <NeedsYouStrip tasks={store.tasks} agents={agent.agents} onOpen={setDetailTaskId} />
+          <NeedsYouStrip
+            tasks={store.tasks}
+            agents={agent.agents}
+            workflowRuns={agent.workflowRuns}
+            onOpen={setDetailTaskId}
+          />
 
           <div className="mb-4">
             <AddTaskBar ref={addInputRef} projects={store.projects} onAdd={store.addTask} />
@@ -452,6 +457,7 @@ export default function App({ initial }: { initial: InitialState }) {
           onProjectChange={store.setTaskProject}
           onClaudeConfigChange={store.setTaskClaudeConfig}
           onShareNotesChange={store.setShareNotes}
+          onWorkflowChange={(id, workflowId) => store.updateTask(id, { workflowId })}
           onFocus={handleFocus}
           onComplete={handleComplete}
           onDelete={handleDelete}

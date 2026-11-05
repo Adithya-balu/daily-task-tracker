@@ -64,6 +64,8 @@ export type Project = {
   rules: string
   references: Reference[]
   claude: ClaudeConfig
+  /** Test & lint command for workflow `ci` stages ({{project.ciCommand}}). */
+  ciCommand?: string
   createdAt: number
 }
 
@@ -82,6 +84,8 @@ export type Task = {
   claude: ClaudeConfig
   /** Include private notes in the prompt sent to Claude. */
   shareNotesWithClaude: boolean
+  /** Workflow (workflows/<id>.json) this task runs through; unset = manual Claude runs only. */
+  workflowId?: string
   /** "Next step when I return" - shown prominently so you can resume instantly. */
   resumeNote: string
   /** Timestamped log of what was accomplished, appended on each pause. */

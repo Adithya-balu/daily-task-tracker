@@ -1,4 +1,5 @@
 import type { AgentState, RunMode, RunRequest } from './agentTypes'
+import type { Ticket } from './workflowTypes'
 import { DEFAULT_CLAUDE_CONFIG, type ClaudeConfig, type Project, type Reference, type Task } from './types'
 
 export type ResolvedClaudeConfig = typeof DEFAULT_CLAUDE_CONFIG
@@ -150,6 +151,24 @@ export function buildRunRequest(
     appendSystemPrompt: buildSystemAppend(project),
     resume: kind !== 'start',
     fork,
+  }
+}
+
+/** Task context sent when a workflow starts; stages build their prompts from it. */
+export function buildTicket(task: Task, project: Project | null | undefined): Ticket {
+  const config = resolveConfig(task, project)
+  const refs = contextReferences(task, project)
+  return {
+    title: task.title,
+    notes: task.shareNotesWithClaude ? task.notes : '',
+    references: refs,
+    plan: task.plan,
+    projectRules: project?.rules ?? '',
+    ciCommand: project?.ciCommand ?? '',
+    workingDir: config.workingDir,
+    model: config.model,
+    effort: config.effort,
+    addDirs: refs.filter((r) => r.kind === 'path').map((r) => r.value),
   }
 }
 

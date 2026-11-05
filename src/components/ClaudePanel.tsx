@@ -16,7 +16,7 @@ import { formatTokens, formatUsd } from '../lib/format'
 import { formatDuration, formatTime } from '../lib/time'
 import { ClaudeSettingsFields } from './ClaudeSettingsFields'
 import { RunLog } from './RunLog'
-import { AgentBadge, FieldLabel, inputClass } from './ui'
+import { AgentBadge, Btn, FieldLabel, inputClass } from './ui'
 
 type Props = {
   task: Task
@@ -337,26 +337,5 @@ export function ClaudePanel({
         </pre>
       </details>
     </div>
-  )
-}
-
-function Btn({
-  kind = 'default',
-  children,
-  ...rest
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { kind?: 'default' | 'primary' | 'danger' }) {
-  const styles = {
-    default: 'border border-white/10 text-slate-200 hover:bg-white/10',
-    primary: 'bg-violet-500 text-white shadow-lg shadow-violet-500/20 hover:bg-violet-400',
-    danger: 'border border-rose-500/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20',
-  }
-  return (
-    <button
-      type="button"
-      {...rest}
-      className={`rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-95 disabled:pointer-events-none disabled:opacity-40 ${styles[kind]}`}
-    >
-      {children}
-    </button>
   )
 }

@@ -105,6 +105,18 @@ export function ProjectsDialog({ projects, taskCounts, onAdd, onUpdate, onDelete
                     className={inputClass}
                   />
                 </label>
+                <label>
+                  <FieldLabel>Test &amp; lint command</FieldLabel>
+                  <input
+                    value={selected.ciCommand ?? ''}
+                    onChange={(e) => onUpdate(selected.id, { ciCommand: e.target.value })}
+                    placeholder="e.g. npm test && npm run lint"
+                    className={`${inputClass} font-mono`}
+                  />
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Run by workflow CI stages in the working folder. Pass = exit code 0.
+                  </span>
+                </label>
                 <div>
                   <div className="mb-2 text-sm font-medium text-slate-300">Claude defaults</div>
                   <ClaudeSettingsFields

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AgentState } from '../lib/agentTypes'
+import { NEEDS_YOU_STATUSES, type WorkflowRun } from '../lib/workflowTypes'
 import type { ClaudeConfig, PlanStep, Project, Reference, Task } from '../lib/types'
 import type { UseAgent } from '../hooks/useAgent'
 import { formatDuration } from '../lib/time'
@@ -8,9 +9,10 @@ import { ClaudePanel } from './ClaudePanel'
 import { NotesEditor } from './NotesEditor'
 import { PlanEditor } from './PlanEditor'
 import { ReferencesPanel } from './ReferencesPanel'
-import { AgentBadge, PriorityChip } from './ui'
+import { AgentBadge, PriorityChip, WorkflowBadge } from './ui'
+import { WorkflowPanel } from './WorkflowPanel'
 
-type Tab = 'plan' | 'notes' | 'references' | 'claude' | 'activity'
+type Tab = 'plan' | 'notes' | 'references' | 'claude' | 'workflow' | 'activity'
 
 type Props = {
   task: Task
@@ -28,6 +30,7 @@ type Props = {
   onProjectChange: (id: string, projectId: string | null) => void
   onClaudeConfigChange: (id: string, patch: Partial<ClaudeConfig>) => void
   onShareNotesChange: (id: string, share: boolean) => void
+  onWorkflowChange: (id: string, workflowId: string | undefined) => void
   onFocus: (id: string) => void
   onComplete: (id: string) => void
   onDelete: (id: string) => void
@@ -39,7 +42,8 @@ const STATUS_LABEL: Record<Task['status'], string> = {
   done: 'Done',
 }
 
-function initialTab(agent: AgentState | undefined): Tab {
+function initialTab(agent: AgentState | undefined, run: WorkflowRun | undefined): Tab {
+  if (run && (run.status === 'running' || NEEDS_YOU_STATUSES.includes(run.status))) return 'workflow'
   switch (agent?.status) {
     case 'running':
     case 'in_terminal':
@@ -55,7 +59,8 @@ function initialTab(agent: AgentState | undefined): Tab {
 /** Side drawer with everything about one task: plan, notes, references, Claude, activity. */
 export function TaskWorkspace(props: Props) {
   const { task, project, projects, agent, isActive, onClose } = props
-  const [tab, setTab] = useState<Tab>(() => initialTab(agent))
+  const workflowRun = props.agentApi.workflowRuns[task.id]?.[0]
+  const [tab, setTab] = useState<Tab>(() => initialTab(agent, workflowRun))
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -75,6 +80,7 @@ export function TaskWorkspace(props: Props) {
     { id: 'notes', label: 'Notes' },
     { id: 'references', label: 'References', badge: refCount ? String(refCount) : undefined },
     { id: 'claude', label: 'Claude', badge: agent?.totals.runs ? String(agent.totals.runs) : undefined },
+    { id: 'workflow', label: 'Workflow', badge: task.workflowId },
     {
       id: 'activity',
       label: 'Activity',
@@ -131,6 +137,7 @@ export function TaskWorkspace(props: Props) {
               ))}
             </select>
             <AgentBadge status={agent?.status} openedIn={agent?.openedIn} />
+            <WorkflowBadge status={workflowRun?.status} />
             {task.pomodorosCompleted > 0 && (
               <span>
                 {task.pomodorosCompleted} pomo &middot; {formatDuration(task.focusedSeconds)} focused
@@ -169,6 +176,12 @@ export function TaskWorkspace(props: Props) {
               {t.label}
               {t.id === 'claude' && agent?.status === 'running' && (
                 <span className="h-2 w-2 animate-pulse rounded-full bg-violet-400" />
+              )}
+              {t.id === 'workflow' && workflowRun?.status === 'running' && (
+                <span className="h-2 w-2 animate-pulse rounded-full bg-violet-400" />
+              )}
+              {t.id === 'workflow' && workflowRun && NEEDS_YOU_STATUSES.includes(workflowRun.status) && (
+                <span className="h-2 w-2 rounded-full bg-amber-400" />
               )}
               {t.badge && <span className="text-xs text-slate-500">{t.badge}</span>}
             </button>
@@ -231,6 +244,14 @@ export function TaskWorkspace(props: Props) {
               onConfigChange={(patch) => props.onClaudeConfigChange(task.id, patch)}
               onShareNotesChange={(share) => props.onShareNotesChange(task.id, share)}
               focusRunId={focusRunId}
+            />
+          )}
+          {tab === 'workflow' && (
+            <WorkflowPanel
+              task={task}
+              project={project}
+              agentApi={props.agentApi}
+              onWorkflowChange={(id) => props.onWorkflowChange(task.id, id)}
             />
           )}
           {tab === 'activity' && (

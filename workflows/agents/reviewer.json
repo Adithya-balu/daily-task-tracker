@@ -1,0 +1,47 @@
+{
+  "agent": "reviewer",
+  "prompt": "reviewer.md",
+  "knowledge": ["shared", "agent"],
+  "outcomeFromIssues": {
+    "blocking": ["blocker", "major"],
+    "blocked": "changes_requested",
+    "clear": "approved"
+  },
+  "modes": {
+    "default": {
+      "permissionMode": "default",
+      "allowedTools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash(git diff:*)",
+        "Bash(git log:*)",
+        "Bash(git show:*)",
+        "Bash(git status:*)"
+      ],
+      "disallowedTools": ["Edit", "Write", "NotebookEdit", "Read(./**/.env)", "Read(./**/.env.*)"],
+      "instructions": "Review the branch diff (run the git diff command given above) against the ticket and the approved plan.",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "verdict": { "type": "string", "enum": ["approved", "changes_requested"] },
+          "summary": { "type": "string", "description": "Overall assessment, 1-3 sentences." },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "severity": { "type": "string", "enum": ["blocker", "major", "minor"] },
+                "file": { "type": "string" },
+                "line": { "type": "integer" },
+                "description": { "type": "string" }
+              },
+              "required": ["severity", "description"]
+            }
+          }
+        },
+        "required": ["verdict", "summary", "issues"]
+      }
+    }
+  }
+}

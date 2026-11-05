@@ -17,6 +17,7 @@ import {
   type RunSummary,
   type ServerEvent,
   type StructuredResult,
+  type TokenUsage,
 } from '../src/lib/agentTypes'
 import type { Store } from './store'
 
@@ -56,7 +57,46 @@ type ActiveRun = {
   /** Task was deleted mid-run: discard the result. */
   forgotten: boolean
   killTimer: ReturnType<typeof setTimeout> | null
+  /** Workflow stage runs leave the task's interactive session alone. */
+  headless: boolean
+  sessionId: string | null
+  onClose: (run: ActiveRun, code: number | null) => void
 }
+
+/** A one-off session for a workflow stage (see server/workflow/). */
+export type HeadlessRequest = {
+  prompt: string
+  cwd: string
+  title: string
+  permissionMode: string
+  allowedTools: string[]
+  disallowedTools: string[]
+  jsonSchema: string
+  model?: string
+  effort?: string
+  maxBudgetUsd?: number
+  appendSystemPrompt?: string
+  addDirs: string[]
+  /** Continue this session instead of starting a fresh one (output retries). */
+  resumeSessionId?: string
+  env: NodeJS.ProcessEnv
+}
+
+export type HeadlessResult = {
+  runId: string
+  sessionId: string | null
+  structured: unknown
+  isError: boolean
+  error: string | null
+  usage: TokenUsage
+  costUsd: number
+  durationMs: number
+  numTurns: number
+  model: string | null
+}
+
+/** Returns why manual runs are blocked for a task, or null. */
+export type RunGuard = (taskId: string) => string | null
 
 export class AgentHub {
   private agents: AgentMap
@@ -64,6 +104,7 @@ export class AgentHub {
   private listeners = new Set<(e: ServerEvent) => void>()
   private active = new Map<string, ActiveRun>()
   private readonly store: Store
+  private guard: RunGuard = () => null
 
   constructor(store: Store) {
     this.store = store
@@ -148,12 +189,19 @@ export class AgentHub {
 
   // ---- runs ----
 
+  /** Lets the workflow engine block manual runs on tasks it is driving. */
+  setRunGuard(guard: RunGuard): void {
+    this.guard = guard
+  }
+
   startRun(taskId: string, req: RunRequest): string {
     const agent = this.agent(taskId)
     if (agent.status === 'running') throw new HttpError(409, 'A run is already in progress.')
     if (agent.status === 'in_terminal') {
       throw new HttpError(409, 'This task is open in Terminal. Close it (or click "I\'m back") first.')
     }
+    const blocked = this.guard(taskId)
+    if (blocked) throw new HttpError(409, blocked)
 
     let cwd: string
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--json-schema', RESULT_SCHEMA]
@@ -184,24 +232,92 @@ export class AgentHub {
     if (c.maxBudgetUsd && c.maxBudgetUsd > 0) args.push('--max-budget-usd', String(c.maxBudgetUsd))
     if (req.title) args.push('--name', req.title.slice(0, 80))
     if (req.appendSystemPrompt) args.push('--append-system-prompt', req.appendSystemPrompt)
-    // File references give Claude access to their folder; bad paths are skipped.
-    for (const ref of req.addDirs) {
-      try {
-        const resolved = resolveDir(ref)
-        if (!fs.existsSync(resolved)) continue
-        const dir = fs.statSync(resolved).isDirectory() ? resolved : path.dirname(resolved)
-        if (!dir.startsWith(cwd)) args.push('--add-dir', dir)
-      } catch {
-        // not an absolute path; Claude can still try to read it relative to cwd
-      }
-    }
+    args.push(...addDirArgs(req.addDirs, cwd))
 
+    const run = this.launch(taskId, req.mode, args, cwd, req.prompt, process.env, false, (r, code) =>
+      this.finishRun(r, code),
+    )
+    this.setAgent(taskId, {
+      status: 'running',
+      activeRunId: run.id,
+      lastMode: req.mode,
+      error: null,
+      // A new session forgets the old one until init reports the new id.
+      ...(req.resume ? {} : { sessionId: null, cwd }),
+    })
+    return run.id
+  }
+
+  /**
+   * Runs a fresh (or resumed) headless session for a workflow stage. Its log
+   * is stored and streamed like any other run, but it doesn't touch the task's
+   * own Claude session or status. `done` settles when the process exits.
+   */
+  runHeadless(taskId: string, req: HeadlessRequest): { runId: string; done: Promise<HeadlessResult> } {
+    if (!fs.existsSync(req.cwd) || !fs.statSync(req.cwd).isDirectory()) {
+      throw new HttpError(400, `Working folder not found: ${req.cwd}`)
+    }
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--json-schema', req.jsonSchema]
+    if (req.resumeSessionId) args.push('--resume', req.resumeSessionId)
+    else args.push('--session-id', randomUUID())
+    if (req.model) args.push('--model', req.model)
+    if (req.effort) args.push('--effort', req.effort)
+    args.push('--permission-mode', req.permissionMode)
+    if (req.allowedTools.length) args.push('--allowedTools', req.allowedTools.join(','))
+    if (req.disallowedTools.length) args.push('--disallowedTools', req.disallowedTools.join(','))
+    if (req.maxBudgetUsd && req.maxBudgetUsd > 0) args.push('--max-budget-usd', req.maxBudgetUsd.toFixed(2))
+    if (req.title) args.push('--name', req.title.slice(0, 80))
+    if (req.appendSystemPrompt) args.push('--append-system-prompt', req.appendSystemPrompt)
+    args.push(...addDirArgs(req.addDirs, req.cwd))
+
+    let resolve!: (r: HeadlessResult) => void
+    const done = new Promise<HeadlessResult>((r) => (resolve = r))
+    const mode = req.permissionMode === 'plan' ? 'plan' : 'execute'
+    const run = this.launch(taskId, mode, args, req.cwd, req.prompt, req.env, true, (r, code) => {
+      const p = parseRun(r, code)
+      for (const fn of r.subscribers) fn({ kind: 'end', at: Date.now() })
+      r.subscribers.clear()
+      resolve({
+        runId: r.id,
+        sessionId: r.sessionId,
+        structured: p.isError ? null : p.structured,
+        isError: p.isError,
+        error: r.forgotten ? 'Task deleted.' : p.errorText,
+        usage: p.usage,
+        costUsd: p.costUsd,
+        durationMs: p.durationMs,
+        numTurns: p.numTurns,
+        model: p.model,
+      })
+    })
+    return { runId: run.id, done }
+  }
+
+  /** Stops one run by id (used to cancel workflow stages). */
+  stopRun(runId: string): void {
+    const run = this.active.get(runId)
+    if (!run) return
+    run.stopped = true
+    run.child.kill('SIGINT')
+    run.killTimer = setTimeout(() => run.child.kill('SIGTERM'), 3000)
+  }
+
+  private launch(
+    taskId: string,
+    mode: RunSummary['mode'],
+    args: string[],
+    cwd: string,
+    prompt: string,
+    env: NodeJS.ProcessEnv,
+    headless: boolean,
+    onClose: ActiveRun['onClose'],
+  ): ActiveRun {
     const runId = randomUUID()
-    const child = spawn(claudeBin(), args, { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(claudeBin(), args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
     const run: ActiveRun = {
       id: runId,
       taskId,
-      mode: req.mode,
+      mode,
       child,
       startedAt: Date.now(),
       lines: [],
@@ -212,20 +328,14 @@ export class AgentHub {
       stopped: false,
       forgotten: false,
       killTimer: null,
+      headless,
+      sessionId: null,
+      onClose,
     }
     this.active.set(runId, run)
     fs.writeFileSync(run.logFile, '')
 
-    this.setAgent(taskId, {
-      status: 'running',
-      activeRunId: runId,
-      lastMode: req.mode,
-      error: null,
-      // A new session forgets the old one until init reports the new id.
-      ...(req.resume ? {} : { sessionId: null, cwd }),
-    })
-
-    child.stdin?.end(req.prompt)
+    child.stdin?.end(prompt)
     child.stderr?.on('data', (d: Buffer) => {
       run.stderr = (run.stderr + d.toString()).slice(-4000)
     })
@@ -236,9 +346,11 @@ export class AgentHub {
     })
     child.on('close', (code) => {
       rl.close()
-      this.finishRun(run, code)
+      if (run.killTimer) clearTimeout(run.killTimer)
+      this.active.delete(run.id)
+      run.onClose(run, code)
     })
-    return runId
+    return run
   }
 
   stop(taskId: string): void {
@@ -306,7 +418,9 @@ export class AgentHub {
     } catch {
       return
     }
-    if (msg.type === 'system' && msg.subtype === 'init') {
+    if (msg.type === 'system' && msg.subtype === 'init' && run.headless) {
+      run.sessionId = (msg.session_id as string) ?? null
+    } else if (msg.type === 'system' && msg.subtype === 'init') {
       this.setAgent(run.taskId, {
         sessionId: (msg.session_id as string) ?? null,
         cwd: (msg.cwd as string) ?? null,
@@ -320,45 +434,27 @@ export class AgentHub {
   }
 
   private finishRun(run: ActiveRun, code: number | null): void {
-    if (run.killTimer) clearTimeout(run.killTimer)
-    this.active.delete(run.id)
     if (run.forgotten) {
       for (const fn of run.subscribers) fn({ kind: 'end', at: Date.now() })
       return
     }
 
     const r = run.result
-    const usageRaw = (r?.usage ?? {}) as Record<string, number>
-    const usage = r
-      ? {
-          input: usageRaw.input_tokens ?? 0,
-          output: usageRaw.output_tokens ?? 0,
-          cacheRead: usageRaw.cache_read_input_tokens ?? 0,
-          cacheWrite: usageRaw.cache_creation_input_tokens ?? 0,
-        }
-      : emptyUsage()
-    const structured = (r?.structured_output ?? null) as StructuredResult | null
-    const isError = run.stopped || !r || Boolean(r.is_error) || r.subtype !== 'success'
-    const errorText = run.stopped
-      ? 'Stopped by you.'
-      : !r
-        ? `Claude exited (code ${code}) without a result. ${run.stderr.trim().slice(-600)}`
-        : r.subtype !== 'success'
-          ? `Run ended: ${String(r.subtype)}${r.result ? ` - ${String(r.result).slice(0, 300)}` : ''}`
-          : null
+    const parsed = parseRun(run, code)
+    const { usage, isError, errorText } = parsed
+    const structured = parsed.structured as StructuredResult | null
 
     const summary: RunSummary = {
       id: run.id,
       mode: run.mode,
-      // Record what actually ran: the CLI may substitute models (e.g. in plan mode).
-      model: r?.modelUsage ? Object.keys(r.modelUsage as object).join(', ') : null,
+      model: parsed.model,
       startedAt: run.startedAt,
       endedAt: Date.now(),
       resultText: structured?.summary ?? (typeof r?.result === 'string' ? r.result : errorText ?? ''),
       usage,
-      costUsd: Number(r?.total_cost_usd ?? 0),
-      numTurns: Number(r?.num_turns ?? 0),
-      durationMs: Number(r?.duration_ms ?? Date.now() - run.startedAt),
+      costUsd: parsed.costUsd,
+      numTurns: parsed.numTurns,
+      durationMs: parsed.durationMs,
       permissionDenials: Array.isArray(r?.permission_denials) ? r.permission_denials.length : 0,
       isError,
     }
@@ -423,6 +519,55 @@ export class HttpError extends Error {
     super(message)
     this.status = status
   }
+}
+
+/** Reads usage, cost and the structured result off a finished run. */
+function parseRun(run: ActiveRun, code: number | null) {
+  const r = run.result
+  const usageRaw = (r?.usage ?? {}) as Record<string, number>
+  const usage: TokenUsage = r
+    ? {
+        input: usageRaw.input_tokens ?? 0,
+        output: usageRaw.output_tokens ?? 0,
+        cacheRead: usageRaw.cache_read_input_tokens ?? 0,
+        cacheWrite: usageRaw.cache_creation_input_tokens ?? 0,
+      }
+    : emptyUsage()
+  const isError = run.stopped || !r || Boolean(r.is_error) || r.subtype !== 'success'
+  const errorText = run.stopped
+    ? 'Stopped by you.'
+    : !r
+      ? `Claude exited (code ${code}) without a result. ${run.stderr.trim().slice(-600)}`
+      : r.subtype !== 'success'
+        ? `Run ended: ${String(r.subtype)}${r.result ? ` - ${String(r.result).slice(0, 300)}` : ''}`
+        : null
+  return {
+    usage,
+    structured: (r?.structured_output ?? null) as unknown,
+    isError,
+    errorText,
+    // Record what actually ran: the CLI may substitute models (e.g. in plan mode).
+    model: r?.modelUsage ? Object.keys(r.modelUsage as object).join(', ') : null,
+    costUsd: Number(r?.total_cost_usd ?? 0),
+    numTurns: Number(r?.num_turns ?? 0),
+    durationMs: Number(r?.duration_ms ?? Date.now() - run.startedAt),
+  }
+}
+
+/** File references give Claude access to their folder; bad paths are skipped. */
+function addDirArgs(refs: string[], cwd: string): string[] {
+  const args: string[] = []
+  for (const ref of refs) {
+    try {
+      const resolved = resolveDir(ref)
+      if (!fs.existsSync(resolved)) continue
+      const dir = fs.statSync(resolved).isDirectory() ? resolved : path.dirname(resolved)
+      if (!dir.startsWith(cwd)) args.push('--add-dir', dir)
+    } catch {
+      // not an absolute path; Claude can still try to read it relative to cwd
+    }
+  }
+  return args
 }
 
 /** Turns one stream-json message into the simplified lines the UI shows. */

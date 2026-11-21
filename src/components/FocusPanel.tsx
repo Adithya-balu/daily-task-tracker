@@ -1,8 +1,10 @@
-import type { Task } from '../lib/types'
+import { useState } from 'react'
+import type { PlanStep, Task } from '../lib/types'
 import type { UsePomodoro } from '../hooks/usePomodoro'
 import { formatDuration, formatTime } from '../lib/time'
 import { PomodoroTimer } from './PomodoroTimer'
 import { NotesEditor } from './NotesEditor'
+import { PlanEditor } from './PlanEditor'
 import { PriorityChip } from './ui'
 
 type Props = {
@@ -14,6 +16,7 @@ type Props = {
   onTitleChange: (id: string, title: string) => void
   onResumeNoteChange: (id: string, text: string) => void
   onNotesChange: (id: string, text: string) => void
+  onPlanChange: (id: string, plan: PlanStep[]) => void
 }
 
 export function FocusPanel({
@@ -25,7 +28,12 @@ export function FocusPanel({
   onTitleChange,
   onResumeNoteChange,
   onNotesChange,
+  onPlanChange,
 }: Props) {
+  const [pane, setPane] = useState<'plan' | 'notes'>(() =>
+    task.plan.length > 0 || !task.notes.trim() ? 'plan' : 'notes',
+  )
+
   return (
     <section className="rounded-3xl border border-indigo-500/20 bg-gradient-to-b from-indigo-500/10 to-white/[0.02] p-6 shadow-xl">
       <div className="mb-6 flex items-start justify-between gap-4">
@@ -83,17 +91,37 @@ export function FocusPanel({
         />
 
         <div className="flex min-w-0 flex-col gap-5">
-          {/* Details / implementation plan for the task. */}
+          {/* Plan steps / private notes. */}
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-slate-400">
-              Notes &amp; plan
+            <div className="mb-2 flex items-center gap-1">
+              {(['plan', 'notes'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setPane(p)}
+                  className={`rounded-md px-2 py-0.5 text-xs font-semibold uppercase tracking-widest transition ${
+                    pane === p ? 'bg-white/10 text-slate-200' : 'text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  {p === 'plan' ? `Plan${task.plan.length ? ` ${task.plan.filter((s) => s.status === 'done').length}/${task.plan.length}` : ''}` : 'Notes'}
+                </button>
+              ))}
             </div>
-            <NotesEditor
-              key={task.id}
-              value={task.notes}
-              onChange={(v) => onNotesChange(task.id, v)}
-              rows={4}
-            />
+            {pane === 'plan' ? (
+              <PlanEditor
+                steps={task.plan}
+                onChange={(plan) => onPlanChange(task.id, plan)}
+                notes={task.notes}
+                compact
+              />
+            ) : (
+              <NotesEditor
+                key={task.id}
+                value={task.notes}
+                onChange={(v) => onNotesChange(task.id, v)}
+                rows={4}
+              />
+            )}
           </div>
 
           {/* Resume-here note: the first thing you see when coming back. */}

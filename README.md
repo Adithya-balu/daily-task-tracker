@@ -20,12 +20,70 @@ When you're constantly interrupted, tasks pile up and every return to a task cos
 - **Focus panel** with a circular timer, resume note, session log, and per-task stats (pomodoros + focused time).
 - **Notion-style board**: drag task cards across **To do -> In progress -> Done** columns to change status (drop on Done to complete, which also stops the timer if it was running).
 - **Drag-to-reorder within a column**: an insertion line shows exactly where a card will land, so you can arrange tasks in whatever order you like. Your manual order is saved and persists.
-- **Per-task notes / plan**: click any card to open a detail view with a big notes area for details, an implementation plan, checklists, or links. The active task also has an inline notes area in the focus panel, and cards with notes show a small indicator.
+- **Task workspace**: click any card to open a side drawer with tabs for **Plan** (ordered steps, each owned by you or Claude), **Notes** (private scratchpad), **References** (links, local files, pasted snippets), **Claude**, and **Activity** (your pause notes, Claude runs and terminal sessions in one timeline). "Resume here" stays pinned on every tab.
+- **Projects**: group tasks under a project that holds the working folder, Claude defaults, rules and shared references. Filter the board by project.
+- **Claude Code integration**: hand a task to Claude Code (see below).
 - **Checklists inside notes**: use markdown task syntax (`- [ ] item` / `- [x] item`), or hit the "Checklist item" button. In Preview mode the boxes are interactive - tick them off and the notes text updates automatically.
+- **Plan view (time blocking)**: the sidebar groups views into **Tasks** (Today, History) and **Today's plan** (Plan). Plan is an Apple Calendar-style day timeline. Drag on empty time to block it (snaps to 15 min), double-click for a one-hour block, drag a block to move it or its bottom edge to resize, and drag open tasks from the **Unscheduled** list onto the timeline (or hit **+** to drop one into the next free hour). Overlapping blocks sit side by side, a red line tracks the current time, and the selected block's editor sets start/end, duration presets, the linked task, and a **Focus now** button that starts the Pomodoro. Page to other days to plan ahead. The Today tab shows a **Now / Next** strip from the plan.
 - **Day-based Done**: unfinished work always stays on Today. The Done column shows only today's completions; older ones move to a **History** tab (grouped by day), with Restore to bring one back.
 - **Brain dump inbox**: park a distracting thought without leaving your current task, then triage it into a task later.
+- **Light, dark, or system appearance**: switch under **Appearance** at the bottom of the sidebar. The choice is remembered per browser; "Match system" follows your OS setting live.
 - **Desktop notification + chime** when a focus session ends.
-- **Keyboard shortcuts**: `n` to add a task, `space` to start/pause the active timer.
+- **Keyboard shortcuts**: `n` to add a task, `space` to start/pause the active timer; on the Plan tab, `Delete` removes the selected block and `Esc` deselects it.
+
+## Claude Code integration
+
+Daily Focus can run [Claude Code](https://code.claude.com) on a task, using the `claude` CLI already installed on this machine in headless mode (`claude -p`). It uses the CLI's existing login, so a Pro/Max/Team subscription works without an API key. Runs draw on your plan's usage limits.
+
+- **Per-task settings** (inherit from the project, then app defaults): model, effort, working folder, extra allowed tools, a per-run budget cap, and an optional git worktree.
+- **Plan first, then approve** (default): Claude investigates in read-only plan mode and its steps fill the Plan tab. Edit them, then **Approve plan & run** to continue the same session in `acceptEdits` (or `auto`) mode.
+- **Continue / Fork / Start fresh**: each task keeps its Claude session; continue it with a message, branch it, or start over.
+- **Live output, Stop, and run history** with tokens (input/output/cache), an API-equivalent cost estimate, turns and duration. Totals show on cards, in History, and in the "Claude tokens today" stat.
+- **Open in Terminal**: opens Terminal.app on the same session (`claude --resume`) so you can steer it interactively. The task is locked while it's open and unlocks when Claude exits there (or click **I'm back**).
+- **Needs you** strip above the board for plans to approve, finished runs, and failures; desktop notifications when a run ends.
+
+Headless runs can't ask for permission, so tools that aren't allowed by the permission mode or the "Also allow tools" setting are denied (the run history flags denials). Each run ends with a structured summary that is logged to Activity and updates "Resume here".
+
+**Security**: the API runs code on your machine. It's served only by the Vite dev server on `127.0.0.1`, rejects non-localhost Host/Origin headers and cross-site requests, and requires an `X-Daily-Focus` header on every state-changing request.
+
+## Agent workflows
+
+A task can also go through a **workflow**: a sequence of agents (coder, reviewer) and checks, defined in config, with you approving key steps. Agents never call each other. The app starts each stage in a **fresh headless session**, reads the stage's structured verdict, and picks the next stage from the workflow's transitions. Design: [docs/agent-workflow-design.md](docs/agent-workflow-design.md).
+
+- **Editing in the app**: the sidebar's **AI → Workflows & agents** view edits workflows and agents with forms. See [AI section](#ai-section) below.
+- **Config** lives in `workflows/`, not in code. `workflows/<id>.json` is a state machine of stages, each with a type and `next` transitions keyed by outcome:
+  - `agent`: runs an agent from `workflows/agents/<name>.json`. That file holds its role prompt (`.md`), permission mode, allowed and denied tools, and an output schema. The schema's `verdict` enum is the stage's outcomes.
+  - `command`: runs a shell command in the working folder (`pass`/`fail` by exit code). `{{project.ciCommand}}` is the project's **Test & lint command**.
+  - `gate`: waits for you to approve, or reject with a comment.
+  - `limits`: `max_loops`, `max_cost_usd`, `timeout_minutes`.
+- **Validation**: files are checked when listed and started. The checks cover unknown stages, agents and modes; missing or unknown transitions; unreachable stages; and loops that can never reach `done`. Invalid workflows show their errors and can't start.
+- **Shipped workflows**:
+  - `standard-dev`: plan → your approval → implement → CI → review → your merge approval. CI failure and review rejection go back to implement.
+  - `bugfix`: the same without the plan step.
+- **How to run one**: pick a workflow on the task's **Workflow** tab and press **Start workflow**. The working folder must be a git repository with a clean working tree. The app creates and checks out `daily-focus/<task>-<id>` and commits each implement stage there. **Nothing is merged or pushed**: merging stays your job.
+- **Handoff, not shared sessions**: each stage's prompt is built from the task's handoff record. That record holds the ticket, the approved plan, the branch, earlier stages' summaries, and outstanding feedback from CI, the reviewer, or your rejection comments.
+- **Verdicts**: if an agent's output is missing or doesn't match its schema, the app asks the same session once more. After that, the stage fails and the task escalates to you. The reviewer's outcome follows issue severity: only `blocker` and `major` issues request changes.
+- **Limits and escalation**: a return to a stage already visited in the same pass counts as a loop, unless it comes from your rejection at a gate. Going past `max_loops`, or spending `max_cost_usd`, pauses the task and escalates it to you with a summary of every loop. From there you can **Resume from** any stage.
+- **Timeline**: every stage is shown with its verdict, summary, issues, duration, tokens and cost, plus links to its session log, diff and command output. Gates and escalations appear in **Needs you** and trigger a notification.
+- **Safety**: workflow sessions and commands get an environment with credential-like variables removed. Every agent session is also denied reading `.env` files and running `git push`, `merge`, `rebase`, `reset`, `checkout` and `switch`, whatever its config allows. The shipped reviewer can only read files and run read-only git commands. This is a heuristic, not a sandbox.
+- Tasks without a workflow behave exactly as before. While a workflow is active on a task, manual Claude runs on that task are blocked.
+
+## AI section
+
+**AI → Workflows & agents** in the sidebar edits the config without touching files by hand. Design: [docs/ai-section-design.md](docs/ai-section-design.md).
+
+- **Where edits go**: the files in `workflows/` are the built-in defaults and are never changed by the app. Your edits are saved in `data/ai/` in the same format, and override a built-in with the same id. Each entry is labelled **Built-in**, **Modified** (can be reset to default) or **Custom** (can be deleted). To make an edit the new default, copy its file from `data/ai/` into `workflows/`.
+- **Versions**: every save raises the version. Runs keep a copy of the workflow and agents they started with, so edits only affect runs started afterwards.
+- **Workflows tab**: description, start stage, limits, and a card per stage. Each card has its type, agent and mode (or command, or what a gate shows), and a dropdown for where each outcome goes. A one-line preview shows the main path and its loops. Errors show live, and an invalid workflow can't be saved.
+- **Agents tab**: role prompt, description, and model and effort (which override the task's when set). Each mode has:
+  - instructions;
+  - a permission mode and allowed/denied tools, with presets (plan only, read-only, read + git, read + run commands, edit code). The always-denied rules are shown locked, and risky combinations get a warning;
+  - an output from a template (plan, implement, review, check, custom verdicts), or a raw JSON schema.
+
+  The **severity rule** (which issue severities send work back) can be edited too.
+- **Safe edits**: an agent change that would break a workflow using it, such as removing a mode or a verdict, can't be saved. An agent used by a workflow can't be deleted.
+- **New entries** start blank or as a copy. New agents can also start from a reviewer-like, QA-like or blank starter. Ids are fixed once created; use **Duplicate** to make a renamed copy.
+- The knowledge base for agents is planned for Phase 3.
 
 ## Getting started
 
@@ -36,22 +94,51 @@ npm run dev
 
 Then open the printed local URL (e.g. `http://localhost:5173/`) in your browser.
 
-To create a production build:
+`npm run dev` (and `nohup npm run dev &`) die when you close the Cursor project — the IDE sends SIGTERM to the terminal process tree, which `nohup` does not ignore. To keep the server running:
+
+```bash
+npm run dev:detach
+```
+
+That starts Vite under launchd (not as a Cursor child). Stop it with `npm run dev:stop`.
+
+Your data lives in `data/` (gitignored) and is served by the dev server, so the app needs `npm run dev` / `npm run dev:detach` running. The first time it loads, anything the older localStorage version saved is copied into `data/` (localStorage is left untouched as a backup).
+
+Run the tests (workflow engine, config validation and saving, verdicts, templates, git helpers):
+
+```bash
+npm test
+```
+
+To type-check and build (note: `vite preview` serves the UI only, without the local API):
 
 ```bash
 npm run build
-npm run preview
 ```
 
 ## Tech stack
 
 - Vite + React + TypeScript
 - Tailwind CSS v4
-- `localStorage` for persistence
+- A small local API (Vite plugin in `server/`) storing JSON files in `data/` and running the `claude` CLI
 
 ## Project structure
 
 ```
+server/
+  plugin.ts                  # Vite plugin: /api routes + request guard
+  store.ts                   # atomic JSON files under data/
+  agents.ts                  # Claude run manager (spawn claude -p, stream, summarize)
+  terminal.ts                # Open in Terminal + session usage sync
+  http.ts                    # JSON / SSE helpers, localhost guard
+  workflow/
+    config.ts                # load workflows/ + data/ai overrides, validate
+    aiStore.ts               # save / reset / delete AI-section edits (versioned)
+    engine.ts                # workflow state machine (UI-independent, behind ports)
+    verdict.ts, prompts.ts   # output schema checks, stage prompts from the handoff
+    runners.ts, git.ts, env.ts # real ports: headless Claude, shell, git branch, scrubbed env
+workflows/                   # workflow definitions + agents/ (definitions and role prompts)
+docs/agent-workflow-design.md, docs/ai-section-design.md
 src/
   App.tsx                    # layout, view routing, orchestration
   components/
@@ -59,21 +146,39 @@ src/
     Board.tsx                # drag-and-drop kanban board (To do / In progress / Done)
     HistoryPanel.tsx         # past completed tasks grouped by day
     NotesEditor.tsx          # notes with interactive markdown checklists (edit/preview)
-    TaskDetail.tsx           # click-to-open task modal: notes/plan, resume note, log
+    TaskWorkspace.tsx        # task drawer: Plan / Notes / References / Claude / Workflow / Activity
+    WorkflowPanel.tsx        # start a workflow, gates, escalations
+    WorkflowTimeline.tsx     # per-stage timeline, issues, diffs
+    ai/                      # AI section: AiSection, WorkflowEditor, StageCard, AgentEditor, ModeEditor
+    PlanEditor.tsx           # ordered plan steps with status + owner
+    ReferencesPanel.tsx      # links, files, snippets (optionally sent to Claude)
+    ClaudePanel.tsx          # run controls, live log, run history, settings, prompt preview
+    ClaudeSettingsFields.tsx # model / effort / permissions fields with inheritance
+    RunLog.tsx               # streamed run output
+    ActivityTimeline.tsx     # pause notes + Claude runs + terminal sessions
+    ProjectsDialog.tsx       # projects: folder, rules, Claude defaults, references
+    NeedsYouStrip.tsx        # Claude work and workflow gates waiting on you
     FocusPanel.tsx           # active task: timer + notes + resume note + session log
     PomodoroTimer.tsx        # circular countdown + controls
     PauseNotePrompt.tsx      # "what I did / next step" capture on pause
     BrainDumpInbox.tsx       # distraction capture
     SettingsDialog.tsx       # timer durations
-    ui.tsx                   # shared priority styling
+    ui.tsx                   # shared styling: priority chips, agent badges
   hooks/
-    useTasks.ts              # state + localStorage + daily rollover
+    useTasks.ts              # state + server persistence + daily rollover + server effects
+    useAgent.ts              # live Claude state over SSE + run/stop/terminal actions
+    useAiConfig.ts           # AI section: load + save workflows and agents
     usePomodoro.ts           # single-active countdown + focus accounting
   lib/
-    types.ts, storage.ts, time.ts, notify.ts
+    types.ts, agentTypes.ts, workflowTypes.ts  # app + shared client/server types
+    workflowValidate.ts      # workflow/agent validation (shared by server and editors)
+    workflowEdit.ts, agentTemplates.ts  # editor helpers: stage edits, output templates, presets
+    claude.ts                # settings inheritance + prompt builder
+    api.ts, storage.ts, time.ts, format.ts, notify.ts
 ```
 
 ## Notes
 
-- Data lives only in the browser it's opened in. Clearing site data resets everything.
+- Data lives in `data/` next to the app; back it up by copying that folder.
+- In plan mode the CLI may use a different model than the one selected (e.g. a small model can be swapped for a stronger planner); run history shows the model that actually ran.
 - Notifications require granting permission the first time you start a focus session.

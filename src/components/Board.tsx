@@ -1,11 +1,15 @@
 import { memo, useState } from 'react'
 import type { Task, TaskStatus } from '../lib/types'
+import { totalTokens, type AgentMap, type AgentState } from '../lib/agentTypes'
 import { formatDuration } from '../lib/time'
-import { PriorityChip } from './ui'
+import { formatTokens } from '../lib/format'
+import { AgentBadge, PriorityChip } from './ui'
 
 type Props = {
   tasks: Task[]
   activeTaskId: string | null
+  agents: AgentMap
+  projectNames: Record<string, string>
   /** Move/reorder: place `draggedId` in `status` just before `beforeId` (null = end). */
   onReorder: (draggedId: string, status: TaskStatus, beforeId: string | null) => void
   onFocus: (id: string) => void
@@ -24,6 +28,8 @@ type DropTarget = { status: TaskStatus; beforeId: string | null }
 export const Board = memo(function Board({
   tasks,
   activeTaskId,
+  agents,
+  projectNames,
   onReorder,
   onFocus,
   onDelete,
@@ -68,7 +74,7 @@ export const Board = memo(function Board({
               setTargetIfChanged(col.status, null)
             }}
             onDrop={handleDrop}
-            className={`flex min-h-40 flex-col rounded-2xl border p-2.5 transition ${
+            className={`flex min-h-40 min-w-0 flex-col rounded-2xl border p-2.5 transition ${
               isOver
                 ? 'border-indigo-400/50 bg-indigo-500/10'
                 : 'border-white/10 bg-white/[0.02]'
@@ -93,6 +99,8 @@ export const Board = memo(function Board({
                     <DropLine show={showIndicator} />
                     <BoardCard
                       task={task}
+                      agent={agents[task.id]}
+                      projectName={task.projectId ? projectNames[task.projectId] : undefined}
                       isActive={task.id === activeTaskId}
                       isDragging={task.id === draggingId}
                       onDragStart={() => setDraggingId(task.id)}
@@ -129,6 +137,8 @@ function DropLine({ show }: { show: boolean }) {
 
 type CardProps = {
   task: Task
+  agent: AgentState | undefined
+  projectName: string | undefined
   isActive: boolean
   isDragging: boolean
   nextId: string | null
@@ -142,6 +152,8 @@ type CardProps = {
 
 function BoardCard({
   task,
+  agent,
+  projectName,
   isActive,
   isDragging,
   nextId,
@@ -154,6 +166,8 @@ function BoardCard({
 }: CardProps) {
   const isDone = task.status === 'done'
   const hasNotes = task.notes.trim().length > 0
+  const planDone = task.plan.filter((s) => s.status === 'done').length
+  const tokens = agent ? totalTokens(agent.totals) : 0
 
   return (
     <div
@@ -217,9 +231,25 @@ function BoardCard({
 
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
             <PriorityChip priority={task.priority} />
+            <AgentBadge status={agent?.status} openedIn={agent?.openedIn} />
+            {projectName && (
+              <span className="max-w-32 truncate rounded-full border border-white/10 px-2 py-0.5 text-slate-400">
+                {projectName}
+              </span>
+            )}
+            {task.plan.length > 0 && (
+              <span title="Plan steps done">
+                {planDone}/{task.plan.length} steps
+              </span>
+            )}
             {task.pomodorosCompleted > 0 && (
               <span>
                 {task.pomodorosCompleted} pomo &middot; {formatDuration(task.focusedSeconds)}
+              </span>
+            )}
+            {tokens > 0 && (
+              <span className="text-violet-300/70" title="Claude tokens used on this task">
+                {formatTokens(tokens)} tok
               </span>
             )}
           </div>

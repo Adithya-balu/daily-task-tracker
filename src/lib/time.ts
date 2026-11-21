@@ -53,3 +53,29 @@ export function formatTodayHeading(dayKey: string = dayKeyOf()): string {
     day: 'numeric',
   })
 }
+
+/** Minutes since local midnight for the given date (defaults to now). */
+export function minutesOfDay(date: Date = new Date()): number {
+  return date.getHours() * 60 + date.getMinutes()
+}
+
+/** Formats minutes-from-midnight as a short local time, e.g. "9:15 AM". */
+export function formatMinutes(min: number): string {
+  const d = new Date()
+  d.setHours(Math.floor(min / 60), min % 60, 0, 0)
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+/** Hour-only label for a timeline gutter, e.g. "9 AM". */
+export function formatHour(hour: number): string {
+  const d = new Date()
+  d.setHours(hour, 0, 0, 0)
+  return d.toLocaleTimeString([], { hour: 'numeric' })
+}
+
+/** Returns the dayKey `days` after (or before, if negative) the given one. */
+export function shiftDayKey(dayKey: string, days: number): string {
+  const [y, m, d] = dayKey.split('-').map(Number)
+  if (!y || !m || !d) return dayKey
+  return dayKeyOf(new Date(y, m - 1, d + days))
+}

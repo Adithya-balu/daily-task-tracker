@@ -1,0 +1,48 @@
+{
+  "agent": "coder",
+  "version": 1,
+  "prompt": "coder.md",
+  "knowledge": ["shared"],
+  "modes": {
+    "plan": {
+      "permissionMode": "plan",
+      "disallowedTools": ["Edit", "Write", "NotebookEdit", "Read(./**/.env)", "Read(./**/.env.*)"],
+      "instructions": "Analyse the ticket and the relevant code, then produce an implementation plan. Do not modify any files. Put the full plan (markdown) in `plan` and the ordered steps, one short line each, in `planSteps`.",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "verdict": { "type": "string", "enum": ["done"] },
+          "summary": { "type": "string", "description": "What you found, 1-3 sentences." },
+          "plan": { "type": "string", "description": "The implementation plan in markdown." },
+          "planSteps": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["verdict", "summary", "plan", "planSteps"]
+      }
+    },
+    "implement": {
+      "permissionMode": "acceptEdits",
+      "allowedTools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
+      "disallowedTools": [
+        "Bash(git commit:*)",
+        "Bash(git push:*)",
+        "Bash(git checkout:*)",
+        "Bash(git switch:*)",
+        "Bash(git merge:*)",
+        "Bash(git rebase:*)",
+        "Bash(git reset:*)",
+        "Read(./**/.env)",
+        "Read(./**/.env.*)"
+      ],
+      "instructions": "Implement the approved plan on the current branch, addressing any outstanding feedback first. Run the relevant tests yourself. Do not commit, switch branches or push: the app commits your changes after this stage.",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "verdict": { "type": "string", "enum": ["done"] },
+          "summary": { "type": "string", "description": "What changed and why, 1-5 sentences." },
+          "filesChanged": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["verdict", "summary", "filesChanged"]
+      }
+    }
+  }
+}

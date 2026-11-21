@@ -1,0 +1,44 @@
+{
+  "workflow": "standard-dev",
+  "version": 1,
+  "description": "Plan, approve, implement, test, review, then wait for merge approval.",
+  "stages": {
+    "analysis": {
+      "type": "agent",
+      "agent": "coder",
+      "mode": "plan",
+      "next": { "done": "plan_approval" }
+    },
+    "plan_approval": {
+      "type": "gate",
+      "show": "plan",
+      "next": { "approved": "implement", "rejected": "analysis" }
+    },
+    "implement": {
+      "type": "agent",
+      "agent": "coder",
+      "mode": "implement",
+      "next": { "done": "ci" }
+    },
+    "ci": {
+      "type": "command",
+      "run": "{{project.ciCommand}}",
+      "next": { "pass": "review", "fail": "implement" }
+    },
+    "review": {
+      "type": "agent",
+      "agent": "reviewer",
+      "next": { "approved": "merge_approval", "changes_requested": "implement" }
+    },
+    "merge_approval": {
+      "type": "gate",
+      "show": "diff",
+      "next": { "approved": "done", "rejected": "implement" }
+    }
+  },
+  "limits": {
+    "max_loops": 3,
+    "max_cost_usd": 5,
+    "timeout_minutes": 60
+  }
+}

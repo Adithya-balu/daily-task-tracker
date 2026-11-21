@@ -1,10 +1,13 @@
 import { useMemo } from 'react'
 import type { Task } from '../lib/types'
+import { totalTokens, type AgentMap } from '../lib/agentTypes'
 import { formatDayLabel, formatDuration, formatTime } from '../lib/time'
+import { formatTokens } from '../lib/format'
 import { PriorityChip } from './ui'
 
 type Props = {
   tasks: Task[]
+  agents: AgentMap
   today: string
   onOpen: (id: string) => void
   onRestore: (id: string) => void
@@ -16,13 +19,16 @@ type DayGroup = {
   tasks: Task[]
   focusedSeconds: number
   pomodoros: number
+  tokens: number
 }
 
 /**
  * Past completed work, grouped by day. Today's Done stays on the board;
  * older completions land here. Unfinished tasks are never listed here.
  */
-export function HistoryPanel({ tasks, today, onOpen, onRestore, onDelete }: Props) {
+export function HistoryPanel({ tasks, agents, today, onOpen, onRestore, onDelete }: Props) {
+  const tokensOf = (id: string) => (agents[id] ? totalTokens(agents[id].totals) : 0)
+
   const groups = useMemo(() => {
     const byDay = new Map<string, Task[]>()
     for (const t of tasks) {
@@ -40,11 +46,12 @@ export function HistoryPanel({ tasks, today, onOpen, onRestore, onDelete }: Prop
         tasks: dayTasks,
         focusedSeconds: dayTasks.reduce((n, t) => n + t.focusedSeconds, 0),
         pomodoros: dayTasks.reduce((n, t) => n + t.pomodorosCompleted, 0),
+        tokens: dayTasks.reduce((n, t) => n + tokensOf(t.id), 0),
       })
     }
     result.sort((a, b) => (a.dayKey < b.dayKey ? 1 : -1))
     return result
-  }, [tasks, today])
+  }, [tasks, today, agents])
 
   if (groups.length === 0) {
     return (
@@ -69,6 +76,7 @@ export function HistoryPanel({ tasks, today, onOpen, onRestore, onDelete }: Prop
               {group.tasks.length} done
               {group.pomodoros > 0 && <> &middot; {group.pomodoros} pomo</>}
               {group.focusedSeconds > 0 && <> &middot; {formatDuration(group.focusedSeconds)}</>}
+              {group.tokens > 0 && <> &middot; {formatTokens(group.tokens)} Claude tokens</>}
             </span>
           </div>
           <ul className="flex flex-col gap-2">
@@ -95,6 +103,9 @@ export function HistoryPanel({ tasks, today, onOpen, onRestore, onDelete }: Prop
                       </span>
                     )}
                     {task.notes.trim() && <span>Has notes</span>}
+                    {tokensOf(task.id) > 0 && (
+                      <span className="text-violet-300/60">{formatTokens(tokensOf(task.id))} tok</span>
+                    )}
                   </div>
                 </button>
                 <button
